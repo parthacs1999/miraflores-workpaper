@@ -6,27 +6,32 @@ import { useCallback, useEffect, useState } from "react";
 const API =
     process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
-type Role = "preparer" | "reviewer" | "partner";
-type Status = "open" | "in_review" | "resolved" | "escalated";
-
-type Finding = {
+export type ReviewFinding = {
     id: string;
-    code: string;
+    code?: string;
     title: string;
     description: string;
     severity: string;
     refs: string[];
-    status: Status;
+    status: ReviewStatus;
     review_note: string;
     updated_by: string | null;
     updated_at: string | null;
 };
 
+type ReviewRole = "preparer" | "reviewer" | "partner";
+
+type ReviewStatus =
+    | "open"
+    | "in_review"
+    | "resolved"
+    | "escalated";
+
 type ReviewResponse = {
     version: string;
     total: number;
-    findings: Finding[];
-    status_counts: Record<Status, number>;
+    findings: ReviewFinding[];
+    status_counts: Record<ReviewStatus, number>;
 };
 
 type ReviewEvent = {
@@ -39,12 +44,20 @@ type ReviewEvent = {
     created_at: string;
 };
 
-const statuses: { value: Status; label: string }[] = [
-    { value: "open", label: "Open" },
-    { value: "in_review", label: "In Review" },
-    { value: "resolved", label: "Resolved" },
-    { value: "escalated", label: "Escalated" },
-];
+type ReviewWorkspaceProps = {
+    version: string;
+    onSelectFinding?: (finding: ReviewFinding) => void;
+};
+
+const statuses: {
+    value: ReviewStatus;
+    label: string;
+}[] = [
+        { value: "open", label: "Open" },
+        { value: "in_review", label: "In Review" },
+        { value: "resolved", label: "Resolved" },
+        { value: "escalated", label: "Escalated" },
+    ];
 
 async function readResponse(response: Response) {
     const data = await response.json();
@@ -62,14 +75,18 @@ async function readResponse(response: Response) {
 
 export default function ReviewWorkspace({
     version,
-}: {
-    version: string;
-}) {
+    onSelectFinding,
+}: ReviewWorkspaceProps) {
     const [data, setData] = useState<ReviewResponse | null>(null);
-    const [selectedId, setSelectedId] = useState<string | null>(null);
-    const [role, setRole] = useState<Role>("reviewer");
-    const [reviewerName, setReviewerName] = useState("Demo Reviewer");
-    const [status, setStatus] = useState<Status>("open");
+    const [selectedId, setSelectedId] = useState<string | null>(
+        null
+    );
+
+    const [role, setRole] = useState<ReviewRole>("reviewer");
+    const [reviewerName, setReviewerName] = useState(
+        "Demo Reviewer"
+    );
+    const [status, setStatus] = useState<ReviewStatus>("open");
     const [note, setNote] = useState("");
     const [history, setHistory] = useState<ReviewEvent[]>([]);
     const [loading, setLoading] = useState(true);
@@ -78,36 +95,53 @@ export default function ReviewWorkspace({
     const [message, setMessage] = useState("");
 
     const refresh = useCallback(async () => {
-        const result = await fetch(
+        const result = (await fetch(
             `${API}/api/reviews?version=${encodeURIComponent(version)}`,
             { cache: "no-store" }
-        ).then(readResponse);
+        ).then(readResponse)) as ReviewResponse;
 
         setData(result);
-        return result as ReviewResponse;
+        return result;
     }, [version]);
 
     useEffect(() => {
         let active = true;
 
-        fetch(
-            `${API}/api/reviews?version=${encodeURIComponent(version)}`,
-            { cache: "no-store" }
-        )
-            .then(readResponse)
-            .then((result: ReviewResponse) => {
-                if (!active) return;
-                setData(result);
-                setSelectedId(null);
-                setHistory([]);
-                setError("");
-            })
-            .catch((err) => {
-                if (active) setError(err.message);
-            })
-            .finally(() => {
-                if (active) setLoading(false);
-            });
+        async function loadReviews() {
+            setLoading(true);
+            setSelectedId(null);
+            setHistory([]);
+            setMessage("");
+            setError("");
+            setData(null);
+
+            try {
+                const result = (await fetch(
+                    `${API}/api/reviews?version=${encodeURIComponent(
+                        version
+                    )}`,
+                    { cache: "no-store" }
+                ).then(readResponse)) as ReviewResponse;
+
+                if (active) {
+                    setData(result);
+                }
+            } catch (err) {
+                if (active) {
+                    setError(
+                        err instanceof Error
+                            ? err.message
+                            : "Unable to load reviews"
+                    );
+                }
+            } finally {
+                if (active) {
+                    setLoading(false);
+                }
+            }
+        }
+
+        void loadReviews();
 
         return () => {
             active = false;
@@ -115,30 +149,37 @@ export default function ReviewWorkspace({
     }, [version]);
 
     const selected = data?.findings.find(
-        (item) => item.id === selectedId
+        (finding) => finding.id === selectedId
     );
 
     async function loadHistory(findingId: string) {
         const result = await fetch(
-            `${API}/api/reviews/${encodeURIComponent(findingId)}/history?version=${encodeURIComponent(version)}`
+            `${API}/api/review-history?version=${encodeURIComponent(
+                version
+            )}&finding_id=${encodeURIComponent(findingId)}`,
+            { cache: "no-store" }
         ).then(readResponse);
 
-        setHistory(result.events);
+        setHistory(result.events ?? []);
     }
 
-    async function selectFinding(finding: Finding) {
+    async function selectFinding(finding: ReviewFinding) {
         setSelectedId(finding.id);
         setStatus(finding.status);
-        setNote(finding.review_note);
+        setNote(finding.review_note ?? "");
+        setHistory([]);
         setMessage("");
         setError("");
-        setHistory([]);
+
+        onSelectFinding?.(finding);
 
         try {
             await loadHistory(finding.id);
         } catch (err) {
             setError(
-                err instanceof Error ? err.message : "Unable to load history"
+                err instanceof Error
+                    ? err.message
+                    : "Unable to load audit history"
             );
         }
     }
@@ -152,10 +193,14 @@ export default function ReviewWorkspace({
 
         try {
             await fetch(
-                `${API}/api/reviews/${encodeURIComponent(selectedId)}?version=${encodeURIComponent(version)}`,
+                `${API}/api/review-decision?version=${encodeURIComponent(
+                    version
+                )}&finding_id=${encodeURIComponent(selectedId)}`,
                 {
                     method: "PATCH",
-                    headers: { "Content-Type": "application/json" },
+                    headers: {
+                        "Content-Type": "application/json",
+                    },
                     body: JSON.stringify({
                         status,
                         note,
@@ -167,10 +212,13 @@ export default function ReviewWorkspace({
 
             await refresh();
             await loadHistory(selectedId);
+
             setMessage("Review saved successfully.");
         } catch (err) {
             setError(
-                err instanceof Error ? err.message : "Unable to save review"
+                err instanceof Error
+                    ? err.message
+                    : "Unable to save review"
             );
         } finally {
             setSaving(false);
@@ -181,7 +229,10 @@ export default function ReviewWorkspace({
         <div className="p-5">
             <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
                 <div>
-                    <h3 className="text-lg font-semibold">CPA Review Queue</h3>
+                    <h3 className="text-lg font-semibold">
+                        CPA Review Queue
+                    </h3>
+
                     <p className="mt-1 text-sm text-slate-500">
                         Version {version} · Persistent review decisions
                     </p>
@@ -192,11 +243,22 @@ export default function ReviewWorkspace({
                         <label className="mb-1 block text-xs font-medium text-slate-500">
                             Demo role
                         </label>
+
                         <select
                             aria-label="Demo role"
                             value={role}
-                            onChange={(e) => setRole(e.target.value as Role)}
-                            className="rounded-lg border border-slate-200 px-3 py-2 text-sm"
+                            onChange={(event) => {
+                                const nextRole = event.target.value as ReviewRole;
+                                setRole(nextRole);
+
+                                if (
+                                    nextRole === "preparer" &&
+                                    status === "resolved"
+                                ) {
+                                    setStatus("in_review");
+                                }
+                            }}
+                            className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm"
                         >
                             <option value="preparer">Preparer</option>
                             <option value="reviewer">Reviewer</option>
@@ -208,10 +270,14 @@ export default function ReviewWorkspace({
                         <label className="mb-1 block text-xs font-medium text-slate-500">
                             Reviewer name
                         </label>
+
                         <input
                             aria-label="Reviewer name"
                             value={reviewerName}
-                            onChange={(e) => setReviewerName(e.target.value)}
+                            onChange={(event) =>
+                                setReviewerName(event.target.value)
+                            }
+                            maxLength={120}
                             className="rounded-lg border border-slate-200 px-3 py-2 text-sm"
                         />
                     </div>
@@ -219,19 +285,27 @@ export default function ReviewWorkspace({
             </div>
 
             {error && (
-                <p role="alert" className="mb-4 rounded-lg bg-red-50 p-3 text-sm text-red-700">
+                <p
+                    role="alert"
+                    className="mb-4 rounded-lg bg-red-50 p-3 text-sm text-red-700"
+                >
                     {error}
                 </p>
             )}
 
             {message && (
-                <p role="status" className="mb-4 rounded-lg bg-green-50 p-3 text-sm text-green-700">
+                <p
+                    role="status"
+                    className="mb-4 rounded-lg bg-green-50 p-3 text-sm text-green-700"
+                >
                     {message}
                 </p>
             )}
 
             {loading ? (
-                <p className="text-sm text-slate-500">Loading reviews...</p>
+                <p className="text-sm text-slate-500">
+                    Loading reviews...
+                </p>
             ) : !data ? (
                 <p className="text-sm text-slate-500">
                     Review data is unavailable.
@@ -244,7 +318,10 @@ export default function ReviewWorkspace({
                                 key={item.value}
                                 className="rounded-xl border border-slate-200 bg-slate-50 p-3"
                             >
-                                <p className="text-xs text-slate-500">{item.label}</p>
+                                <p className="text-xs text-slate-500">
+                                    {item.label}
+                                </p>
+
                                 <p className="mt-1 text-2xl font-semibold">
                                     {data.status_counts[item.value] ?? 0}
                                 </p>
@@ -254,20 +331,26 @@ export default function ReviewWorkspace({
 
                     {data.findings.length === 0 ? (
                         <div className="rounded-xl border border-dashed border-slate-200 p-8 text-center">
-                            <h4 className="font-semibold">No findings to review</h4>
+                            <h4 className="font-semibold">
+                                No findings to review
+                            </h4>
+
                             <p className="mt-2 text-sm text-slate-500">
-                                The current independent checks returned no findings.
-                                This does not mean the tax return is fully verified.
+                                No findings were returned by the current
+                                validation checks. This does not mean the
+                                return is fully verified.
                             </p>
                         </div>
                     ) : (
                         <div className="grid gap-5 lg:grid-cols-2">
-                            <div className="space-y-2">
+                            <div className="max-h-[650px] space-y-2 overflow-auto">
                                 {data.findings.map((finding) => (
                                     <button
                                         key={finding.id}
-                                        onClick={() => selectFinding(finding)}
-                                        className={`w-full rounded-xl border p-4 text-left ${selectedId === finding.id
+                                        onClick={() =>
+                                            void selectFinding(finding)
+                                        }
+                                        className={`w-full rounded-xl border p-4 text-left transition ${selectedId === finding.id
                                                 ? "border-indigo-400 bg-indigo-50"
                                                 : "border-slate-200 hover:bg-slate-50"
                                             }`}
@@ -276,13 +359,16 @@ export default function ReviewWorkspace({
                                             <span className="text-sm font-semibold">
                                                 {finding.title}
                                             </span>
+
                                             <span className="text-xs font-medium uppercase text-slate-500">
                                                 {finding.severity}
                                             </span>
                                         </div>
+
                                         <p className="mt-2 line-clamp-2 text-xs text-slate-500">
                                             {finding.description}
                                         </p>
+
                                         <p className="mt-2 text-xs font-medium text-indigo-600">
                                             {finding.status.replace("_", " ")}
                                         </p>
@@ -296,26 +382,37 @@ export default function ReviewWorkspace({
                                         Select a finding to begin reviewing.
                                     </p>
                                 ) : (
-                                    <div>
-                                        <h4 className="font-semibold">{selected.title}</h4>
+                                    <>
+                                        <h4 className="font-semibold">
+                                            {selected.title}
+                                        </h4>
+
                                         <p className="mt-2 text-sm text-slate-600">
                                             {selected.description}
                                         </p>
 
                                         <p className="mt-3 break-all font-mono text-xs text-slate-400">
-                                            {selected.refs.join(" · ")}
+                                            {(selected.refs ?? []).join(" · ")}
+                                        </p>
+
+                                        <p className="mt-3 text-xs text-indigo-600">
+                                            Supporting evidence is displayed in the
+                                            Evidence Inspector.
                                         </p>
 
                                         <label className="mt-5 block text-sm font-medium">
                                             Review status
                                         </label>
+
                                         <select
                                             aria-label="Review status"
                                             value={status}
-                                            onChange={(e) =>
-                                                setStatus(e.target.value as Status)
+                                            onChange={(event) =>
+                                                setStatus(
+                                                    event.target.value as ReviewStatus
+                                                )
                                             }
-                                            className="mt-2 w-full rounded-lg border border-slate-200 p-3 text-sm"
+                                            className="mt-2 w-full rounded-lg border border-slate-200 bg-white p-3 text-sm"
                                         >
                                             {statuses
                                                 .filter(
@@ -324,7 +421,10 @@ export default function ReviewWorkspace({
                                                         item.value !== "resolved"
                                                 )
                                                 .map((item) => (
-                                                    <option key={item.value} value={item.value}>
+                                                    <option
+                                                        key={item.value}
+                                                        value={item.value}
+                                                    >
                                                         {item.label}
                                                     </option>
                                                 ))}
@@ -333,23 +433,27 @@ export default function ReviewWorkspace({
                                         <label className="mt-5 block text-sm font-medium">
                                             Reviewer note
                                         </label>
+
                                         <textarea
                                             aria-label="Reviewer note"
                                             value={note}
-                                            onChange={(e) => setNote(e.target.value)}
+                                            onChange={(event) =>
+                                                setNote(event.target.value)
+                                            }
                                             rows={4}
                                             maxLength={4000}
-                                            placeholder="Describe what was checked, supporting evidence, and the reason for this decision."
+                                            placeholder="Describe the evidence checked and the reason for your decision."
                                             className="mt-2 w-full rounded-lg border border-slate-200 p-3 text-sm"
                                         />
 
                                         <button
-                                            onClick={saveReview}
+                                            onClick={() => void saveReview()}
                                             disabled={
                                                 saving ||
                                                 !note.trim() ||
                                                 !reviewerName.trim() ||
-                                                (role === "preparer" && status === "resolved")
+                                                (role === "preparer" &&
+                                                    status === "resolved")
                                             }
                                             className="mt-4 w-full rounded-lg bg-indigo-600 px-4 py-3 text-sm font-semibold text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
                                         >
@@ -373,22 +477,27 @@ export default function ReviewWorkspace({
                                                             className="rounded-lg bg-slate-50 p-3"
                                                         >
                                                             <p className="text-xs font-semibold">
-                                                                {event.previous_status} → {event.new_status}
+                                                                {event.previous_status} →{" "}
+                                                                {event.new_status}
                                                             </p>
+
                                                             <p className="mt-1 text-xs text-slate-600">
                                                                 {event.note}
                                                             </p>
+
                                                             <p className="mt-2 text-xs text-slate-400">
-                                                                {event.actor_name} ({event.actor_role})
-                                                                {" · "}
-                                                                {new Date(event.created_at).toLocaleString()}
+                                                                {event.actor_name} (
+                                                                {event.actor_role}) ·{" "}
+                                                                {new Date(
+                                                                    event.created_at
+                                                                ).toLocaleString()}
                                                             </p>
                                                         </div>
                                                     ))}
                                                 </div>
                                             )}
                                         </div>
-                                    </div>
+                                    </>
                                 )}
                             </div>
                         </div>

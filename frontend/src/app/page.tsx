@@ -1,8 +1,11 @@
 
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import ReviewWorkspace from "@/components/ReviewWorkspace";
+import { useEffect, useMemo, useRef, useState } from "react";
+import ReviewWorkspace, {
+  type ReviewFinding,
+} from "@/components/ReviewWorkspace";
+import SourceVerification from "@/components/SourceVerification";
 
 const API =
   process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
@@ -10,7 +13,7 @@ const API =
 type RecordData = Record<string, any>;
 type Tab = "return" | "documents" | "review";
 
-const money = (value: unknown) => {
+function money(value: unknown): string {
   if (typeof value !== "number") {
     return String(value ?? "—");
   }
@@ -18,7 +21,7 @@ const money = (value: unknown) => {
   return new Intl.NumberFormat("en-US", {
     maximumFractionDigits: 2,
   }).format(value);
-};
+}
 
 async function checkResponse(response: Response) {
   if (!response.ok) {
@@ -28,60 +31,147 @@ async function checkResponse(response: Response) {
   return response.json();
 }
 
+function findMatchingLine(
+  finding: ReviewFinding,
+  lines: RecordData[]
+): RecordData | null {
+  const references = Array.isArray(finding.refs)
+    ? finding.refs.filter(
+      (ref): ref is string => typeof ref === "string"
+    )
+    : [];
+
+  for (const ref of references) {
+    const exactMatch = lines.find(
+      (line) => line.key === ref
+    );
+
+    if (exactMatch) return exactMatch;
+  }
+
+  const searchableText = [
+    finding.description,
+    finding.title,
+    ...references,
+  ]
+    .filter(Boolean)
+    .join(" ");
+
+  for (const line of lines) {
+    if (typeof line.key !== "string") continue;
+
+    const escapedKey = line.key.replace(
+      /[.*+?^${}()|[\]\\]/g,
+      "\\$&"
+    );
+
+    const expression = new RegExp(
+      `(^|[^A-Za-z0-9_.])${escapedKey}(?=$|[^A-Za-z0-9_.])`
+    );
+
+    if (expression.test(searchableText)) {
+      return line;
+    }
+  }
+
+  return null;
+}
+
 export default function Home() {
   const [tab, setTab] = useState<Tab>("return");
-  const [overview, setOverview] = useState<RecordData | null>(null);
+  const [overview, setOverview] =
+    useState<RecordData | null>(null);
   const [lines, setLines] = useState<RecordData[]>([]);
   const [documents, setDocuments] = useState<RecordData[]>([]);
-  const [validation, setValidation] = useState<RecordData | null>(null);
+  const [validation, setValidation] =
+    useState<RecordData | null>(null);
+
   const [version, setVersion] = useState("v3");
   const [search, setSearch] = useState("");
+
   const [selectedLine, setSelectedLine] =
     useState<RecordData | null>(null);
   const [selectedDocument, setSelectedDocument] =
     useState<RecordData | null>(null);
-  const [lineage, setLineage] = useState<RecordData | null>(null);
+  const [lineage, setLineage] =
+    useState<RecordData | null>(null);
+  const [selectedEvidenceId, setSelectedEvidenceId] =
+    useState<string | null>(null);
+
   const [loading, setLoading] = useState(true);
+  const [inspectorLoading, setInspectorLoading] =
+    useState(false);
   const [error, setError] = useState("");
+  const [inspectorMessage, setInspectorMessage] = useState("");
+
+  const selectionRequest = useRef(0);
 
   useEffect(() => {
+    let active = true;
+
     Promise.all([
       fetch(`${API}/api/overview`).then(checkResponse),
       fetch(`${API}/api/documents`).then(checkResponse),
     ])
       .then(([overviewData, documentData]) => {
+        if (!active) return;
+
         setOverview(overviewData);
-        setDocuments(documentData);
+        setDocuments(
+          Array.isArray(documentData)
+            ? documentData
+            : documentData.documents ?? []
+        );
       })
       .catch((err) => {
+        if (!active) return;
         setError(
           err instanceof Error
             ? err.message
             : "Unable to load workpaper"
         );
       });
+
+    return () => {
+      active = false;
+    };
   }, []);
 
   useEffect(() => {
+    let active = true;
+
+    selectionRequest.current += 1;
     setLoading(true);
+    setLines([]);
     setSelectedLine(null);
     setSelectedDocument(null);
+    setSelectedEvidenceId(null);
     setLineage(null);
+    setInspectorMessage("");
+    setInspectorLoading(false);
 
     Promise.all([
       fetch(
-        `${API}/api/return-lines?version=${version}`
+        `${API}/api/return-lines?version=${encodeURIComponent(
+          version
+        )}`
       ).then(checkResponse),
       fetch(
-        `${API}/api/validation?version=${version}`
+        `${API}/api/validation?version=${encodeURIComponent(
+          version
+        )}`
       ).then(checkResponse),
     ])
       .then(([returnData, validationData]) => {
+        if (!active) return;
+
         setLines(returnData.lines ?? []);
         setValidation(validationData);
         setError("");
       })
       .catch((err) => {
+        if (!active) return;
+
         setError(
           err instanceof Error
             ? err.message
@@ -89,34 +179,57 @@ export default function Home() {
         );
       })
       .finally(() => {
-        setLoading(false);
+        if (active) setLoading(false);
       });
+
+    return () => {
+      active = false;
+    };
   }, [version]);
 
   async function selectLine(line: RecordData) {
+    const requestId = ++selectionRequest.current;
+
     setSelectedLine(line);
     setSelectedDocument(null);
+    setSelectedEvidenceId(null);
     setLineage(null);
+    setInspectorMessage("");
+    setInspectorLoading(true);
     setError("");
 
     try {
       const result = await fetch(
         `${API}/api/lineage/${encodeURIComponent(
           line.key
-        )}?version=${version}`
+        )}?version=${encodeURIComponent(version)}`
       ).then(checkResponse);
 
-      setLineage(result.lineage);
+      if (requestId !== selectionRequest.current) return;
+
+      setLineage(result.lineage ?? result);
     } catch (err) {
-      setError(
+      if (requestId !== selectionRequest.current) return;
+
+      setInspectorMessage(
         err instanceof Error
           ? err.message
           : "Unable to trace return line"
       );
+    } finally {
+      if (requestId === selectionRequest.current) {
+        setInspectorLoading(false);
+      }
     }
   }
 
   async function selectDocument(id: string) {
+    const requestId = ++selectionRequest.current;
+
+    setSelectedDocument(null);
+    setSelectedEvidenceId(null);
+    setInspectorLoading(true);
+    setInspectorMessage("");
     setError("");
 
     try {
@@ -124,29 +237,75 @@ export default function Home() {
         `${API}/api/documents/${encodeURIComponent(id)}`
       ).then(checkResponse);
 
+      if (requestId !== selectionRequest.current) return;
+
       setSelectedDocument(document);
     } catch (err) {
-      setError(
+      if (requestId !== selectionRequest.current) return;
+
+      setInspectorMessage(
         err instanceof Error
           ? err.message
           : "Unable to open document"
       );
+    } finally {
+      if (requestId === selectionRequest.current) {
+        setInspectorLoading(false);
+      }
     }
   }
 
+  function selectFindingEvidence(finding: ReviewFinding) {
+    const matchingLine = findMatchingLine(finding, lines);
+
+    if (matchingLine) {
+      void selectLine(matchingLine);
+      return;
+    }
+
+    selectionRequest.current += 1;
+    setSelectedLine(null);
+    setSelectedDocument(null);
+    setSelectedEvidenceId(null);
+    setLineage(null);
+    setInspectorLoading(false);
+    setInspectorMessage(
+      "No matching return line was found for this finding. " +
+      "Its references are available in the review panel."
+    );
+  }
+
+  function openEvidence(evidenceId: string) {
+    selectionRequest.current += 1;
+    setInspectorLoading(false);
+    setSelectedDocument(null);
+    setSelectedEvidenceId(evidenceId);
+    setInspectorMessage("");
+  }
+
+  function closeEvidence() {
+    setSelectedEvidenceId(null);
+  }
+
   const filteredLines = useMemo(() => {
+    const query = search.toLowerCase();
+
     return lines.filter((line) =>
-      `${line.key} ${line.label} ${line.form}`
+      `${line.key ?? ""} ${line.label ?? ""} ${line.form ?? ""
+        }`
         .toLowerCase()
-        .includes(search.toLowerCase())
+        .includes(query)
     );
   }, [lines, search]);
 
   const filteredDocuments = useMemo(() => {
+    const query = search.toLowerCase();
+
     return documents.filter((doc) =>
-      `${doc.id} ${doc.title} ${doc.document_type}`
+      `${doc.id ?? ""} ${doc.title ?? ""} ${doc.document_type ?? ""
+        }`
         .toLowerCase()
-        .includes(search.toLowerCase())
+        .includes(query)
     );
   }, [documents, search]);
 
@@ -204,17 +363,13 @@ export default function Home() {
             label="Source documents"
             value={overview?.stats?.documents ?? "—"}
           />
-
           <Metric
             label="Extracted values"
-            value={overview?.stats?.extracted_values ?? "—"}
+            value={
+              overview?.stats?.extracted_values ?? "—"
+            }
           />
-
-          <Metric
-            label="Return lines"
-            value={lines.length}
-          />
-
+          <Metric label="Return lines" value={lines.length} />
           <Metric
             label="Validation findings"
             value={validation?.total ?? "—"}
@@ -253,11 +408,9 @@ export default function Home() {
               <p className="text-xs font-semibold text-slate-400">
                 CURRENT DATASET
               </p>
-
               <p className="mt-2 text-sm font-medium">
                 {overview?.packet?.client_id ?? "CL-20417"}
               </p>
-
               <p className="mt-1 text-xs text-slate-500">
                 Original packet · Tax year 2025
               </p>
@@ -299,7 +452,10 @@ export default function Home() {
             </div>
 
             {tab === "review" ? (
-              <ReviewWorkspace version={version} />
+              <ReviewWorkspace
+                version={version}
+                onSelectFinding={selectFindingEvidence}
+              />
             ) : loading ? (
               <p className="p-6 text-sm text-slate-500">
                 Loading workpaper...
@@ -309,7 +465,7 @@ export default function Home() {
                 {filteredLines.map((line) => (
                   <button
                     key={line.key}
-                    onClick={() => selectLine(line)}
+                    onClick={() => void selectLine(line)}
                     className={`flex w-full items-center justify-between gap-4 border-b border-slate-100 px-5 py-4 text-left hover:bg-indigo-50/50 ${selectedLine?.key === line.key
                         ? "bg-indigo-50"
                         : ""
@@ -319,16 +475,13 @@ export default function Home() {
                       <p className="text-xs font-semibold text-indigo-600">
                         {line.key}
                       </p>
-
                       <p className="mt-1 text-sm font-medium">
                         {line.label}
                       </p>
-
                       <p className="mt-1 text-xs text-slate-400">
                         {line.jurisdiction}
                       </p>
                     </div>
-
                     <p className="shrink-0 font-mono text-sm font-semibold">
                       {money(line.value)}
                     </p>
@@ -346,23 +499,22 @@ export default function Home() {
                 {filteredDocuments.map((doc) => (
                   <button
                     key={doc.id}
-                    onClick={() => selectDocument(doc.id)}
+                    onClick={() =>
+                      void selectDocument(doc.id)
+                    }
                     className="w-full border-b border-slate-100 px-5 py-4 text-left hover:bg-indigo-50/50"
                   >
                     <div className="flex items-center justify-between gap-4">
                       <span className="text-xs font-bold text-indigo-600">
                         {doc.id}
                       </span>
-
                       <span className="text-xs text-slate-400">
                         {doc.page_count} pages
                       </span>
                     </div>
-
                     <p className="mt-2 text-sm font-medium">
                       {doc.title}
                     </p>
-
                     <p className="mt-1 text-xs text-slate-500">
                       {doc.document_type}
                     </p>
@@ -383,14 +535,25 @@ export default function Home() {
               <h2 className="text-lg font-semibold">
                 Evidence Inspector
               </h2>
-
               <p className="mt-1 text-sm text-slate-500">
                 Calculation lineage and source records
               </p>
             </div>
 
             <div className="max-h-[750px] overflow-auto p-5">
-              {selectedDocument ? (
+              {selectedEvidenceId ? (
+                <SourceVerification
+                  evidenceId={selectedEvidenceId}
+                  onClose={closeEvidence}
+                  onOpenDocument={(id) =>
+                    void selectDocument(id)
+                  }
+                />
+              ) : inspectorLoading ? (
+                <p className="text-sm text-slate-500">
+                  Loading supporting evidence...
+                </p>
+              ) : selectedDocument ? (
                 <div>
                   <button
                     onClick={() =>
@@ -404,7 +567,6 @@ export default function Home() {
                   <p className="text-xs font-bold text-indigo-600">
                     {selectedDocument.id}
                   </p>
-
                   <h3 className="mt-2 font-semibold">
                     {selectedDocument.title}
                   </h3>
@@ -418,7 +580,6 @@ export default function Home() {
                         <p className="mb-3 text-xs font-semibold text-slate-400">
                           PAGE {page.page}
                         </p>
-
                         <p className="whitespace-pre-wrap break-words text-sm leading-7 text-slate-700">
                           {page.printed_content}
                         </p>
@@ -430,20 +591,29 @@ export default function Home() {
                 <LineageNode
                   node={lineage}
                   onOpenDocument={selectDocument}
+                  onOpenEvidence={openEvidence}
                 />
+              ) : inspectorMessage ? (
+                <div className="rounded-xl border border-amber-200 bg-amber-50 p-4">
+                  <h3 className="text-sm font-semibold text-amber-900">
+                    Evidence not linked
+                  </h3>
+                  <p className="mt-2 text-sm text-amber-800">
+                    {inspectorMessage}
+                  </p>
+                </div>
               ) : (
                 <div className="py-14 text-center">
                   <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-indigo-50 text-2xl text-indigo-600">
                     ◎
                   </div>
-
                   <h3 className="font-semibold">
                     Explore the evidence
                   </h3>
-
                   <p className="mt-2 text-sm leading-6 text-slate-500">
-                    Select a return line or document to inspect
-                    its supporting records.
+                    Select a return line or review finding.
+                    Then click an evidence reference to verify
+                    it against the simulated source document.
                   </p>
                 </div>
               )}
@@ -464,10 +634,7 @@ function Metric({
 }) {
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-5">
-      <p className="text-sm text-slate-500">
-        {label}
-      </p>
-
+      <p className="text-sm text-slate-500">{label}</p>
       <p className="mt-2 text-3xl font-semibold tracking-tight">
         {value}
       </p>
@@ -478,17 +645,17 @@ function Metric({
 function LineageNode({
   node,
   onOpenDocument,
+  onOpenEvidence,
 }: {
   node: RecordData;
   onOpenDocument: (id: string) => void;
+  onOpenEvidence: (id: string) => void;
 }) {
   if (node.missing || node.cycle) {
     return (
       <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm">
         {node.key}:{" "}
-        {node.missing
-          ? "Missing input"
-          : "Cycle detected"}
+        {node.missing ? "Missing input" : "Cycle detected"}
       </div>
     );
   }
@@ -500,12 +667,10 @@ function LineageNode({
           <p className="font-mono text-xs font-bold text-indigo-600">
             {node.key}
           </p>
-
           <p className="mt-1 text-sm font-medium">
             {node.label}
           </p>
         </div>
-
         <span className="font-mono text-sm font-semibold">
           {money(node.value)}
         </span>
@@ -518,58 +683,71 @@ function LineageNode({
       )}
 
       {(node.sources ?? []).map(
-        (source: RecordData, index: number) => (
-          <div
-            key={`${source.ref}-${index}`}
-            className="mt-3 rounded-lg bg-slate-50 p-3"
-          >
-            <p className="break-all font-mono text-xs text-slate-500">
-              {source.ref}
-            </p>
+        (source: RecordData, index: number) => {
+          const ref = String(source.ref ?? "");
+          const isEvidence = /^ev-\d+$/.test(ref);
 
-            {source.evidence && (
-              <>
-                <p className="mt-2 text-sm font-medium">
-                  {source.evidence.label}
+          return (
+            <div
+              key={`${ref}-${index}`}
+              className="mt-3 rounded-lg bg-slate-50 p-3"
+            >
+              {isEvidence ? (
+                <button
+                  type="button"
+                  onClick={() => onOpenEvidence(ref)}
+                  className="break-all text-left font-mono text-xs font-semibold text-indigo-600 hover:underline"
+                >
+                  {ref}
+                </button>
+              ) : (
+                <p className="break-all font-mono text-xs text-slate-500">
+                  {ref}
                 </p>
+              )}
 
-                <p className="mt-1 text-sm">
-                  Extracted:{" "}
-                  {String(
-                    source.evidence.value ?? "—"
-                  )}
+              {source.evidence && (
+                <>
+                  <p className="mt-2 text-sm font-medium">
+                    {source.evidence.label}
+                  </p>
+                  <p className="mt-1 text-sm">
+                    Extracted:{" "}
+                    {String(source.evidence.value ?? "—")}
+                  </p>
+                  <p className="mt-1 text-xs text-slate-500">
+                    Confidence:{" "}
+                    {typeof source.evidence.confidence ===
+                      "number"
+                      ? `${Math.round(
+                        source.evidence.confidence * 100
+                      )}%`
+                      : "—"}
+                  </p>
+                </>
+              )}
+
+              {source.document && (
+                <button
+                  type="button"
+                  onClick={() =>
+                    onOpenDocument(source.document.id)
+                  }
+                  className="mt-3 text-left text-sm font-medium text-indigo-600 hover:underline"
+                >
+                  Open {source.document.id}:{" "}
+                  {source.document.title}
+                </button>
+              )}
+
+              {source.type === "external_reference" && (
+                <p className="mt-1 text-xs text-amber-700">
+                  Reference resolution pending
                 </p>
-
-                <p className="mt-1 text-xs text-slate-500">
-                  Confidence:{" "}
-                  {Math.round(
-                    (source.evidence.confidence ?? 0) *
-                    100
-                  )}
-                  %
-                </p>
-              </>
-            )}
-
-            {source.document && (
-              <button
-                onClick={() =>
-                  onOpenDocument(source.document.id)
-                }
-                className="mt-3 text-left text-sm font-medium text-indigo-600 hover:underline"
-              >
-                Open {source.document.id}:{" "}
-                {source.document.title}
-              </button>
-            )}
-
-            {source.type === "external_reference" && (
-              <p className="mt-1 text-xs text-amber-700">
-                Reference resolution pending
-              </p>
-            )}
-          </div>
-        )
+              )}
+            </div>
+          );
+        }
       )}
 
       {(node.inputs ?? []).length > 0 && (
@@ -577,13 +755,13 @@ function LineageNode({
           <p className="mb-3 text-xs font-semibold uppercase text-slate-400">
             Calculation inputs
           </p>
-
           {node.inputs.map(
             (input: RecordData, index: number) => (
               <LineageNode
                 key={`${input.key}-${index}`}
                 node={input}
                 onOpenDocument={onOpenDocument}
+                onOpenEvidence={onOpenEvidence}
               />
             )
           )}

@@ -21,6 +21,10 @@ from app.services.review_service import (
     update_review,
     get_review_history,
 )
+from app.services.source_verification_service import (
+    get_source_verification,
+    get_source_verification_summary,
+)
 
 app = FastAPI(title="MiraFlores Tax Workpaper API")
 
@@ -194,3 +198,57 @@ def review_history(
             status_code=error.status_code,
             detail=error.message,
         )
+
+
+@app.patch("/api/review-decision")
+def save_review_decision(
+    finding_id: str,
+    payload: ReviewUpdate,
+    version: str = "v3",
+):
+    try:
+        return update_review(
+            version=version,
+            finding_id=finding_id,
+            status=payload.status,
+            note=payload.note,
+            actor_role=payload.actor_role,
+            actor_name=payload.actor_name,
+        )
+    except ReviewError as error:
+        raise HTTPException(
+            status_code=error.status_code,
+            detail=error.message,
+        )
+
+
+@app.get("/api/review-history")
+def read_review_history(
+    finding_id: str,
+    version: str = "v3",
+):
+    try:
+        return get_review_history(version, finding_id)
+    except ReviewError as error:
+        raise HTTPException(
+            status_code=error.status_code,
+            detail=error.message,
+        )
+
+
+@app.get("/api/source-verification")
+def source_verification_summary():
+    return get_source_verification_summary()
+
+
+@app.get("/api/source-verification/{evidence_id}")
+def source_verification_detail(evidence_id: str):
+    result = get_source_verification(evidence_id)
+
+    if result is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Extracted value not found",
+        )
+
+    return result
