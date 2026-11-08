@@ -45,3 +45,6 @@ next-env.d.ts
 playwright-report/
 
 .next-workflow-e2e/
+
+# Isolated verification build; never a source artifact
+/.next-ui-verification/
