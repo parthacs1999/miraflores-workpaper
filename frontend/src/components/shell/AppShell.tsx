@@ -247,7 +247,13 @@ export function AppShell({
               </button>
             )}
             <details className="identity-popover">
-              <summary aria-label="Switch staff session">
+              <summary
+                aria-label={
+                  identity?.assurance === "public_simulation"
+                    ? "Switch simulated demo role"
+                    : "Switch staff session"
+                }
+              >
                 <span className="staff-avatar">
                   {identity?.name
                     .split(" ")

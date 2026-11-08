@@ -27,8 +27,13 @@ class ReviewError(Exception):
         super().__init__(message)
 
 
+def database_path():
+    from app.security_context import request_database_path
+    return Path(request_database_path.get() or os.environ.get("REVIEW_DB_PATH", str(DB_PATH)))
+
+
 def connect():
-    path = Path(os.environ.get("REVIEW_DB_PATH", str(DB_PATH)))
+    path = database_path()
     path.parent.mkdir(parents=True, exist_ok=True)
 
     from app.workflow_connection import WorkflowConnection

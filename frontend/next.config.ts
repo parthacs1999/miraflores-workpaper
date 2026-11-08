@@ -1,10 +1,13 @@
 import type { NextConfig } from "next";
 import { hostingConfig } from "./hosting-config.mjs";
 import { assignmentHostingConfig } from "./assignment-hosting-config.mjs";
+import { publicHostingConfig } from "./public-hosting-config.mjs";
 const hosting =
-  process.env.WORKPAPER_PROFILE === "assignment-demo"
-    ? assignmentHostingConfig()
-    : hostingConfig();
+  process.env.WORKPAPER_PROFILE === "public-demo"
+    ? publicHostingConfig()
+    : process.env.WORKPAPER_PROFILE === "assignment-demo"
+      ? assignmentHostingConfig()
+      : hostingConfig();
 
 const nextConfig: NextConfig = {
   distDir: process.env.NEXT_DIST_DIR ?? ".next",

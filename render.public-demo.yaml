@@ -1,0 +1,23 @@
+# PUBLIC FICTIONAL DEMO ONLY. Review before applying. No persistent disk or paid instance.
+services:
+  - type: web
+    name: miraflores-public-demo
+    runtime: python
+    branch: main
+    rootDir: backend
+    region: virginia
+    plan: free
+    numInstances: 1
+    autoDeployTrigger: "off"
+    buildCommand: pip install -r requirements.txt
+    startCommand: python run_public_demo.py
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.13.18
+      - key: WEB_CONCURRENCY
+        value: "1"
+      - key: WORKPAPER_PROFILE
+        value: public-demo
+      - key: WORKPAPER_ORIGINS
+        sync: false

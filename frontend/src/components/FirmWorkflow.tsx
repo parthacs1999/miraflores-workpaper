@@ -49,6 +49,7 @@ type Session = {
   identity_assurance: string;
   expires_at?: string;
   assignment_demo?: boolean;
+  public_demo?: boolean;
   state_warning?: string;
 };
 type Item = {
@@ -134,13 +135,19 @@ function initializeSession() {
   if (!initialization)
     initialization = (async () => {
       const session = await request<Session>("/api/workflow/session");
+      if (process.env.NEXT_PUBLIC_PUBLIC_DEMO === "1" && !session.public_demo)
+        throw new Error(
+          "This frontend requires the separate public-demo backend. Start python run_public_demo.py; do not expose a secure or legacy backend as a public demo.",
+        );
       if (session.legacy_profile) return { session, staff: [] };
       if (session.mode === "locked")
         throw new Error(
           `Backend session provider is locked at ${API}. For local demonstration, stop the old backend and run from backend: .venv/bin/python run_secure.py --demo. Production requires a configured credential provider. Then retry initialization.`,
         );
       if (
-        !["demo", "credential", "access"].includes(session.mode) ||
+        !["demo", "credential", "access", "public_demo"].includes(
+          session.mode,
+        ) ||
         !session.csrf_token
       )
         throw new Error(
@@ -177,7 +184,8 @@ export default function FirmWorkflow({ children }: { children: ReactNode }) {
         if (!active) return;
         sessionCredentials(s.csrf_token ?? "");
         setSession(s);
-        if (s.mode === "access" && s.staff) setSelected(s.staff.id);
+        if ((s.mode === "access" || s.public_demo) && s.staff)
+          setSelected(s.staff.id);
         setStaff(options);
         setInitializationError("");
       })
@@ -319,9 +327,11 @@ export default function FirmWorkflow({ children }: { children: ReactNode }) {
       )}
       <div className="flex flex-wrap items-center gap-2">
         <label>
-          Session staff{" "}
+          {session?.public_demo ? "Simulated demo role" : "Session staff"}{" "}
           <select
-            aria-label="Session staff"
+            aria-label={
+              session?.public_demo ? "Simulated demo role" : "Session staff"
+            }
             disabled={
               initializing ||
               !staff.length ||
@@ -330,7 +340,10 @@ export default function FirmWorkflow({ children }: { children: ReactNode }) {
             }
             className={control}
             value={selected}
-            onChange={(e) => setSelected(e.target.value)}
+            onChange={(e) => {
+              setSelected(e.target.value);
+              if (session?.public_demo) void select(e.target.value);
+            }}
           >
             {!staff.length && (
               <option value="st-01">
@@ -355,16 +368,18 @@ export default function FirmWorkflow({ children }: { children: ReactNode }) {
             onChange={(e) => setCredential(e.target.value)}
           />
         )}
-        <button
-          className="ui-button primary"
-          disabled={initializing || switching || !staff.length}
-          onClick={() => void select(selected)}
-        >
-          {session?.mode === "access"
-            ? "Refresh bound session"
-            : "Start / switch session"}
-        </button>
-        {session?.staff && (
+        {!session?.public_demo && (
+          <button
+            className="ui-button primary"
+            disabled={initializing || switching || !staff.length}
+            onClick={() => void select(selected)}
+          >
+            {session?.mode === "access"
+              ? "Refresh bound session"
+              : "Start / switch session"}
+          </button>
+        )}
+        {session?.staff && !session?.public_demo && (
           <button className={button} onClick={() => void select(null)}>
             End session
           </button>
@@ -381,9 +396,91 @@ export default function FirmWorkflow({ children }: { children: ReactNode }) {
       {error && <p role="alert">{error}</p>}
     </div>
   );
+  if (
+    process.env.NEXT_PUBLIC_PUBLIC_DEMO === "1" &&
+    (!session?.staff || switching)
+  )
+    return (
+      <main className="session-gate">
+        <section className="login-form">
+          <p className="eyebrow">PUBLIC FICTIONAL DEMO · FILING BLOCKED</p>
+          <h1>
+            {switching
+              ? "Switching simulated role"
+              : "Opening your private workpaper"}
+          </h1>
+          <p>
+            No login or reviewer token is required. Sandbox changes are
+            temporary and isolated from other visitors.
+          </p>
+          {initializing || switching ? (
+            <Skeleton />
+          ) : (
+            <>
+              <p role="alert">
+                {initializationError ||
+                  error ||
+                  "The demo session expired. Start a fresh simulation."}
+              </p>
+              <button
+                className="ui-button primary"
+                onClick={() => {
+                  setInitializing(true);
+                  setInitializationError("");
+                  setError("");
+                  setAttempt((v) => v + 1);
+                }}
+              >
+                Retry public demo
+              </button>
+            </>
+          )}
+        </section>
+      </main>
+    );
   return (
     <ConfirmationProvider key={session?.csrf_token ?? "locked"}>
       {assignmentNotice}
+      {(session?.public_demo ||
+        process.env.NEXT_PUBLIC_PUBLIC_DEMO === "1") && (
+        <div
+          role="status"
+          className="notice warning"
+          data-testid="public-demo-warning"
+        >
+          PUBLIC DEMO · Fictional packet · Simulated roles and approvals, not
+          authenticated identities or legal signatures · Your changes are
+          isolated and expire within one hour or on server restart · FILING
+          BLOCKED.
+          {session?.public_demo && (
+            <button
+              className={button}
+              onClick={async () => {
+                if (
+                  !window.confirm(
+                    "Reset your private demo sandbox? All of your simulated changes will be discarded.",
+                  )
+                )
+                  return;
+                try {
+                  await request("/api/public-demo/reset", {});
+                  sessionCredentials("");
+                  setSession(null);
+                  setInitializing(true);
+                  setAttempt((v) => v + 1);
+                  const channel = new BroadcastChannel("miraflores-session");
+                  channel.postMessage({ sender: tabId.current });
+                  channel.close();
+                } catch (failure) {
+                  setError(String(failure));
+                }
+              }}
+            >
+              Reset my demo
+            </button>
+          )}
+        </div>
+      )}
       {session?.staff && !switching ? (
         <SessionContext.Provider value={session.staff}>
           <Workspace

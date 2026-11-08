@@ -253,3 +253,7 @@ The browser suites start their own production frontend and backend servers with 
 Deployment has not been performed. Review [DEPLOYMENT.md](DEPLOYMENT.md), [DEPLOYMENT_SECURITY.md](DEPLOYMENT_SECURITY.md), and [DEPLOYMENT_READINESS.md](DEPLOYMENT_READINESS.md) for hosted startup, verified identity access, persistent SQLite, configuration, tests and outstanding release gates. Public demo staff impersonation is not permitted.
 
 For a separate disposable, token-restricted $0 assignment profile, see [FREE_DEPLOYMENT.md](FREE_DEPLOYMENT.md). Vercel Hobby eligibility and packet-sharing approval are required; a scheduled local HTTPS tunnel is documented as the fallback. This does not replace the secure hosted profile.
+
+## Public hiring-assignment demo
+
+For a separate **no-login, fictional-data public demo** with private temporary visitor sandboxes, see [PUBLIC_DEMO_DEPLOYMENT.md](PUBLIC_DEMO_DEPLOYMENT.md). It uses Render Free + Vercel, a simulated role switcher, and server-side blocking of uploads, originals, administrative writes and filing operations. Existing secure profiles remain separate.
