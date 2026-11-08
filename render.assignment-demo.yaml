@@ -1,0 +1,35 @@
+# NON-PRODUCTION / REVIEW ONLY. No disk, paid instance or automatic deployment.
+services:
+  - type: web
+    name: miraflores-assignment-demo
+    runtime: python
+    branch: main
+    rootDir: backend
+    region: virginia
+    plan: free
+    numInstances: 1
+    autoDeployTrigger: "off"
+    buildCommand: pip install -r requirements.txt
+    startCommand: python run_assignment_demo.py
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.13.18
+      - key: WEB_CONCURRENCY
+        value: "1"
+      - key: WORKPAPER_PROFILE
+        value: assignment-demo
+      - key: WORKPAPER_ENV
+        value: production
+      - key: WORKPAPER_ORIGINS
+        sync: false
+      - key: WORKPAPER_ASSIGNMENT_EXPIRES_AT
+        sync: false
+      - key: WORKPAPER_ASSIGNMENT_REVIEWERS
+        sync: false
+      - key: WORKPAPER_ASSIGNMENT_PACKET_SHA256
+        sync: false
+      - key: WORKPAPER_ASSIGNMENT_SEED_SHA256
+        sync: false
+      - key: WORKPAPER_ASSIGNMENT_DATA_APPROVAL
+        sync: false

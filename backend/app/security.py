@@ -19,21 +19,33 @@ class Settings:
     environment: str='production'
     origins: tuple=('http://localhost:3000',)
     credentials: dict=field(default_factory=dict)
+    access_issuer: str=''
+    access_audience: str=''
+    access_staff: dict=field(default_factory=dict)
 
     @classmethod
     def from_env(cls):
-        return cls(os.getenv('WORKPAPER_MODE','locked'),os.getenv('WORKPAPER_ENV','production'),tuple(o for o in os.getenv('WORKPAPER_ORIGINS','http://localhost:3000').split(',') if o),json.loads(os.getenv('WORKPAPER_CREDENTIALS','{}')))
+        return cls(os.getenv('WORKPAPER_MODE','locked'),os.getenv('WORKPAPER_ENV','production'),tuple(o for o in os.getenv('WORKPAPER_ORIGINS','http://localhost:3000').split(',') if o),json.loads(os.getenv('WORKPAPER_CREDENTIALS','{}')),os.getenv('WORKPAPER_ACCESS_ISSUER',''),os.getenv('WORKPAPER_ACCESS_AUDIENCE',''),json.loads(os.getenv('WORKPAPER_ACCESS_STAFF','{}')))
 
     def validate(self):
         if self.environment not in {'production','development','test'}:raise RuntimeError('Unknown application environment')
-        if self.mode not in {'locked','legacy_test','demo','credential'}:raise RuntimeError('Unknown security mode')
+        if self.mode not in {'locked','legacy_test','demo','credential','access'}:raise RuntimeError('Unknown security mode')
         if self.mode=='legacy_test':
             path=Path(os.environ.get('REVIEW_DB_PATH','')).resolve()
             roots=(Path(tempfile.gettempdir()).resolve(),Path('/private/tmp').resolve())
             if self.environment!='test' or not any(path.is_relative_to(root) for root in roots):raise RuntimeError('Legacy profile requires an isolated temporary test database')
         if self.mode=='demo' and self.environment not in {'test','development'}:raise RuntimeError('Demonstration mode is forbidden in production')
         if self.mode=='credential' and (not self.credentials or any(not isinstance(v,str) or len(v)<32 for v in self.credentials.values())):raise RuntimeError('Configured credentials must have at least 32 characters')
-        if self.environment=='production' and self.mode!='locked' and (self.mode!='credential' or any(not o.startswith('https://') for o in self.origins)):raise RuntimeError('Production requires credential mode and HTTPS origins')
+        if self.environment=='production' and self.mode!='locked' and (self.mode not in {'credential','access'} or not self.origins or any(not o.startswith('https://') for o in self.origins)):raise RuntimeError('Production requires credential mode and HTTPS origins')
+        if self.mode=='access':
+            if not re.fullmatch(r'https://[a-z0-9-]+\.cloudflareaccess\.com', self.access_issuer):raise RuntimeError('Access issuer must be an exact HTTPS team domain')
+            if not self.access_audience or len(self.access_audience)>256:raise RuntimeError('Access audience is required')
+            known={s['id'] for s in load_packet()['firm']['staff']}
+            if not isinstance(self.access_staff,dict) or not self.access_staff or any(not isinstance(k,str) or not k or v not in known for k,v in self.access_staff.items()):raise RuntimeError('Access requires explicit subject-to-packet-staff mappings')
+            if self.credentials:raise RuntimeError('Access mode cannot include fallback shared credentials')
+            from urllib.parse import urlsplit
+            if not self.origins or any(urlsplit(o).scheme!='https' or not urlsplit(o).hostname or urlsplit(o).path not in {'','/'} or urlsplit(o).query or urlsplit(o).fragment or urlsplit(o).username or '*' in o or o.endswith('/') for o in self.origins):raise RuntimeError('Access requires exact HTTPS application origins without paths')
+
 
 
 def sha(value):return hashlib.sha256(value.encode()).hexdigest()
@@ -50,19 +62,29 @@ def access(actor,action,resource,purpose,outcome):
                    (actor.get('id') if actor else None,action,json.dumps(resource),purpose,outcome,secrets.token_hex(12),datetime.now(timezone.utc).isoformat()))
 
 
-def new_session(settings,staff_id=None,old=None):
+def new_session(settings,staff_id=None,old=None,identity=None):
     token=secrets.token_urlsafe(36);csrf=secrets.token_urlsafe(32)
-    assurance='demonstration' if settings.mode=='demo' else 'configured_credential'
+    assurance='verified_access_profile' if settings.mode=='access' else ('demonstration' if settings.mode=='demo' else 'configured_credential')
+    from app.access_identity import configuration_epoch
+    expiry=datetime.now(timezone.utc)+timedelta(hours=2)
+    if settings.mode=='access':
+        if not identity or staff_id not in {None,identity['staff_id']}:raise RuntimeError('Verified identity binding required')
+        expiry=min(expiry,datetime.fromtimestamp(identity['expires_at'],timezone.utc),datetime.now(timezone.utc)+timedelta(minutes=30))
     with session_db() as db:
+        if settings.mode=='access':db.execute('BEGIN IMMEDIATE')
         if old:db.execute('UPDATE workflow_sessions SET revoked=1 WHERE token_hash=?',(sha(old),))
-        db.execute('INSERT INTO workflow_sessions VALUES(?,?,?,?,?,?,?)',(sha(token),staff_id,sha(csrf),assurance,(datetime.now(timezone.utc)+timedelta(hours=2)).isoformat(),0,sha(json.dumps(settings.credentials,sort_keys=True))))
+        db.execute('INSERT INTO workflow_sessions VALUES(?,?,?,?,?,?,?)',(sha(token),staff_id,sha(csrf),assurance,expiry.isoformat(),0,configuration_epoch(settings)))
+        if settings.mode=='access':
+            db.execute('INSERT INTO hosted_session_bindings VALUES(?,?,?)',(sha(token),identity['subject_hash'],datetime.now(timezone.utc).isoformat()))
+            db.commit()
     return token,csrf
 
 
 def get_session(token,settings):
     if not token:return None
     with session_db() as db:row=db.execute('SELECT * FROM workflow_sessions WHERE token_hash=?',(sha(token),)).fetchone()
-    if not row or row['revoked'] or row['expires_at']<datetime.now(timezone.utc).isoformat() or row['credential_epoch']!=sha(json.dumps(settings.credentials,sort_keys=True)):return None
+    from app.access_identity import configuration_epoch
+    if not row or row['revoked'] or row['expires_at']<datetime.now(timezone.utc).isoformat() or row['credential_epoch']!=configuration_epoch(settings):return None
     return dict(row)
 
 
@@ -132,7 +154,7 @@ class SecurityBoundary:
         settings=self.settings;request=Request(scope,receive);path=request.url.path;actor=None
         async def error(code,message):
             if actor and code in {401,403}:access(actor,'access',{'path':path},'','denied')
-            headers={'Cache-Control':'no-store','Pragma':'no-cache','Vary':'Cookie, Origin'}
+            headers={'Cache-Control':'no-store','Pragma':'no-cache','Vary':'Cookie, Origin','X-Content-Type-Options':'nosniff','Referrer-Policy':'no-referrer','X-Frame-Options':'DENY'}
             if request.headers.get('origin') in settings.origins:headers.update({'Access-Control-Allow-Origin':request.headers['origin'],'Access-Control-Allow-Credentials':'true'})
             await JSONResponse({'detail':message},status_code=code,headers=headers)(scope,receive,send)
         if settings.mode=='legacy_test':
@@ -140,8 +162,28 @@ class SecurityBoundary:
             return await self.app(scope,receive,send)
         if settings.mode=='demo' and (scope.get('client') or ('testclient',))[0] not in {'127.0.0.1','::1','localhost','testclient'}:return await error(403,'Demonstration sessions are local only')
         if path=='/health' or request.method=='OPTIONS':return await self.app(scope,receive,send)
+        if settings.mode=='access':
+            from app.access_identity import identity_for,IdentityRejected,IdentityUnavailable
+            try:
+                from starlette.concurrency import run_in_threadpool
+                scope['verified_identity']=await run_in_threadpool(identity_for,request,settings)
+            except IdentityRejected:return await error(401,'Verified gateway identity required')
+            except IdentityUnavailable:return await error(503,'Identity provider verification temporarily unavailable')
+
         if path in {'/api/workflow/session','/api/workflow/session/staff'}:
             scope['workflow_settings']=settings
+            if request.method not in {'GET','HEAD'}:
+                chunks=[];size=0
+                async for chunk in request.stream():
+                    size+=len(chunk)
+                    if size>16384:return await error(413,'Session request too large')
+                    chunks.append(chunk)
+                original_receive=receive;body_sent=False
+                async def session_receive():
+                    nonlocal body_sent
+                    if not body_sent:body_sent=True;return {'type':'http.request','body':b''.join(chunks),'more_body':False}
+                    return await original_receive()
+                receive=session_receive
             session_messages=[]
             async def session_send(message):session_messages.append(message)
             await self.app(scope,receive,session_send)
@@ -154,6 +196,10 @@ class SecurityBoundary:
             return
         if settings.mode=='locked':return await error(401,'Access is locked; configure a secure session provider')
         row=get_session(request.cookies.get('mf_session'),settings)
+        if settings.mode=='access':
+            from app.access_identity import session_matches
+            if not session_matches(row,scope['verified_identity']):return await error(401,'Session is not bound to the verified identity')
+
         try:actor=principal(row)
         except AdjustmentError:return await error(401,'Session identity is inactive')
         if not actor:return await error(401,'A workpaper session is required')

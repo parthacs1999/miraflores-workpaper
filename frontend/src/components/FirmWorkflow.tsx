@@ -1,4 +1,5 @@
 "use client";
+import { API_BASE } from "@/lib/api-config";
 import { useConfirm } from "./ui/primitives";
 import {
   useEffect,
@@ -39,13 +40,16 @@ import {
   EmptyState,
   humanize,
 } from "./ui/primitives";
-const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+const API = API_BASE;
 type Session = {
   mode: string;
   staff: StaffIdentity | null;
   csrf_token: string;
   legacy_profile: boolean;
   identity_assurance: string;
+  expires_at?: string;
+  assignment_demo?: boolean;
+  state_warning?: string;
 };
 type Item = {
   id: string;
@@ -135,7 +139,10 @@ function initializeSession() {
         throw new Error(
           `Backend session provider is locked at ${API}. For local demonstration, stop the old backend and run from backend: .venv/bin/python run_secure.py --demo. Production requires a configured credential provider. Then retry initialization.`,
         );
-      if (!["demo", "credential"].includes(session.mode) || !session.csrf_token)
+      if (
+        !["demo", "credential", "access"].includes(session.mode) ||
+        !session.csrf_token
+      )
         throw new Error(
           `Backend session configuration is invalid at ${API}. No identity selection is allowed until a valid demo or credential provider is configured.`,
         );
@@ -170,6 +177,7 @@ export default function FirmWorkflow({ children }: { children: ReactNode }) {
         if (!active) return;
         sessionCredentials(s.csrf_token ?? "");
         setSession(s);
+        if (s.mode === "access" && s.staff) setSelected(s.staff.id);
         setStaff(options);
         setInitializationError("");
       })
@@ -221,6 +229,21 @@ export default function FirmWorkflow({ children }: { children: ReactNode }) {
       window.removeEventListener("pageshow", show);
     };
   }, []);
+  useEffect(() => {
+    if (!session?.staff || !session.expires_at) return;
+    const expiry = Date.parse(session.expires_at);
+    const timer = window.setTimeout(
+      () => {
+        sessionCredentials("");
+        setSession(null);
+        setError(
+          "Session expired. Reload to reauthenticate through the configured session provider.",
+        );
+      },
+      Number.isFinite(expiry) ? Math.max(0, expiry - Date.now()) : 0,
+    );
+    return () => window.clearTimeout(timer);
+  }, [session]);
   async function select(id: string | null) {
     // Invalidate in-flight reads before the server rotates the cookie. Keep the
     // current CSRF secret solely for the authorized session-switch request.
@@ -235,6 +258,12 @@ export default function FirmWorkflow({ children }: { children: ReactNode }) {
       sessionCredentials(s.csrf_token);
       setSession(s);
       setCredential("");
+      if (id === null && s.mode === "access") {
+        window.location.assign(
+          new URL("/cdn-cgi/access/logout", window.location.origin).href,
+        );
+        return;
+      }
       const channel = new BroadcastChannel("miraflores-session");
       channel.postMessage({ sender: tabId.current });
       channel.close();
@@ -250,6 +279,20 @@ export default function FirmWorkflow({ children }: { children: ReactNode }) {
         <LegacyFrame>{children}</LegacyFrame>
       </ConfirmationProvider>
     );
+  const assignmentNotice =
+    session?.assignment_demo ||
+    process.env.NEXT_PUBLIC_ASSIGNMENT_DEMO === "1" ? (
+      <div
+        role="status"
+        className="notice warning"
+        data-testid="assignment-demo-warning"
+      >
+        NON-PRODUCTION ASSIGNMENT DEMO — review changes and audit history
+        disappear on server restart. Temporary reviewer tokens do not establish
+        authenticated staff identity. Use synthetic evidence only. Protected
+        originals are unavailable. FILING BLOCKED.
+      </div>
+    ) : null;
   const sessionControls = (
     <div className="session-controls">
       {" "}
@@ -279,7 +322,12 @@ export default function FirmWorkflow({ children }: { children: ReactNode }) {
           Session staff{" "}
           <select
             aria-label="Session staff"
-            disabled={initializing || !staff.length}
+            disabled={
+              initializing ||
+              !staff.length ||
+              session?.mode === "access" ||
+              (!!session?.assignment_demo && !!session?.staff)
+            }
             className={control}
             value={selected}
             onChange={(e) => setSelected(e.target.value)}
@@ -312,7 +360,9 @@ export default function FirmWorkflow({ children }: { children: ReactNode }) {
           disabled={initializing || switching || !staff.length}
           onClick={() => void select(selected)}
         >
-          Start / switch session
+          {session?.mode === "access"
+            ? "Refresh bound session"
+            : "Start / switch session"}
         </button>
         {session?.staff && (
           <button className={button} onClick={() => void select(null)}>
@@ -333,6 +383,7 @@ export default function FirmWorkflow({ children }: { children: ReactNode }) {
   );
   return (
     <ConfirmationProvider key={session?.csrf_token ?? "locked"}>
+      {assignmentNotice}
       {session?.staff && !switching ? (
         <SessionContext.Provider value={session.staff}>
           <Workspace

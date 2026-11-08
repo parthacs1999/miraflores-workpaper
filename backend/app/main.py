@@ -277,6 +277,9 @@ from app.product_api import router as product_router
 app.include_router(product_router)
 Settings.from_env().validate()
 app.add_middleware(SecurityBoundary)
+if Settings.from_env().mode=="access":
+    from app.hosting_headers import HostedSecurityHeaders
+    app.add_middleware(HostedSecurityHeaders)
 
 def create_app(settings):
     """Explicit settings for isolated strict-mode tests; route contracts are shared."""
@@ -285,4 +288,7 @@ def create_app(settings):
     instance.router.routes.extend(app.router.routes)
     instance.add_middleware(SecurityBoundary,settings=settings)
     instance.add_middleware(CORSMiddleware,allow_origins=list(settings.origins),allow_credentials=True,allow_methods=["GET","POST","PATCH","OPTIONS"],allow_headers=["Content-Type","X-CSRF-Token","X-Sensitive-Access","X-Access-Purpose"])
+    if settings.mode=="access":
+        from app.hosting_headers import HostedSecurityHeaders
+        instance.add_middleware(HostedSecurityHeaders)
     return instance

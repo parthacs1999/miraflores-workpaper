@@ -7,6 +7,7 @@ from app.security import new_session,get_session,principal,sha,access
 from app.services import workflow_service as service
 from app.adjustment_api import invoke
 import secrets
+from datetime import datetime,timezone
 
 router=APIRouter(prefix='/api/workflow',tags=['Firm workflow'])
 
@@ -33,8 +34,8 @@ def actor():
 def session_response(request,token,csrf):
     settings=request.scope['workflow_settings'];row=get_session(token,settings)
     person=invoke(principal,row)
-    response=JSONResponse({'mode':settings.mode,'legacy_profile':False,'staff':person,'csrf_token':csrf,'demonstration':settings.mode=='demo','legal_signature':False,'identity_assurance':'Selected demonstration identity; not authenticated identity assurance' if settings.mode=='demo' else 'Possession of configured credential; not legal signature assurance'},headers={'Cache-Control':'no-store','Pragma':'no-cache'})
-    response.set_cookie('mf_session',token,httponly=True,secure=settings.environment=='production',samesite='strict',max_age=7200)
+    response=JSONResponse({'mode':settings.mode,'legacy_profile':False,'staff':person,'csrf_token':csrf,'expires_at':row['expires_at'],'demonstration':settings.mode in {'demo','access'},'legal_signature':False,'identity_assurance':'Verified gateway identity mapped to a demonstration packet staff profile; not legal signature assurance' if settings.mode=='access' else 'Selected demonstration identity; not authenticated identity assurance' if settings.mode=='demo' else 'Possession of configured credential; not legal signature assurance'},headers={'Cache-Control':'no-store','Pragma':'no-cache'})
+    response.set_cookie('mf_session',token,httponly=True,secure=settings.environment=='production' or settings.mode=='access',samesite='strict',max_age=max(0,min(1800,int((datetime.fromisoformat(row['expires_at'])-datetime.now(timezone.utc)).total_seconds()))) if settings.mode=='access' else 7200)
     return response
 
 @router.get('/session')
@@ -44,27 +45,31 @@ def session(request:Request):
     if settings.mode=='locked':return JSONResponse({'mode':'locked','staff':None,'detail':'Access is locked; configure WORKPAPER_MODE securely'},headers={'Cache-Control':'no-store'})
     old=request.cookies.get('mf_session');row=get_session(old,settings)
     # Rotate CSRF/session on bootstrap so the CSRF secret is never stored in plaintext.
-    token,csrf=new_session(settings,row['staff_id'] if row else None,old)
+    identity=request.scope.get('verified_identity')
+    token,csrf=new_session(settings,identity['staff_id'] if settings.mode=='access' else (row['staff_id'] if row else None),old,identity)
+    if settings.mode=='access':access(principal(get_session(token,settings)),'identity_login',{'subject_hash':identity['subject_hash']},'','allowed')
     return session_response(request,token,csrf)
 
 @router.post('/session')
 def select(request:Request,payload:SessionInput):
     settings=request.scope['workflow_settings']
-    if settings.mode not in {'demo','credential'}:raise HTTPException(403,'Session selection is disabled')
+    if settings.mode not in {'demo','credential','access'}:raise HTTPException(403,'Session selection is disabled')
     old=request.cookies.get('mf_session');row=get_session(old,settings)
     if not row or request.headers.get('origin') not in settings.origins or not secrets.compare_digest(sha(request.headers.get('x-csrf-token','')),row['csrf_hash']):raise HTTPException(403,'Origin and CSRF validation required')
+    identity=request.scope.get('verified_identity')
+    if settings.mode=='access' and (payload.staff_id not in {None,identity['staff_id']} or payload.credential):raise HTTPException(403,'Staff switching is forbidden for this identity')
     person=invoke(service.staff,payload.staff_id) if payload.staff_id else None
     if person and settings.mode=='credential' and not secrets.compare_digest(payload.credential,settings.credentials.get(person['id'],secrets.token_hex(32))):
         access(None,'session',{},'','denied');raise HTTPException(401,'Invalid configured credential')
-    token,csrf=new_session(settings,payload.staff_id,old)
-    access(person,'session',{'assurance':'demonstration' if settings.mode=='demo' else 'configured_credential'},'','allowed')
+    token,csrf=new_session(settings,payload.staff_id,old,identity)
+    access(person,'session',{'assurance':'verified_access_profile' if settings.mode=='access' else ('demonstration' if settings.mode=='demo' else 'configured_credential')},'','allowed')
     return session_response(request,token,csrf)
 
 @router.get('/session/staff')
 def staff_options(request:Request):
     settings=request.scope.get('workflow_settings')
-    if not settings or settings.mode not in {'demo','credential'}:raise HTTPException(403,'Session selection is disabled')
-    return {'staff':[{k:s[k] for k in ('id','name','role','active_from')} for s in service.load_packet()['firm']['staff']]}
+    if not settings or settings.mode not in {'demo','credential','access'}:raise HTTPException(403,'Session selection is disabled')
+    return {'staff':[{k:s[k] for k in ('id','name','role','active_from')} for s in service.load_packet()['firm']['staff'] if settings.mode!='access' or s['id']==request.scope['verified_identity']['staff_id']]}
 
 @router.get('/overview')
 def overview():return invoke(service.overview,actor())

@@ -48,7 +48,10 @@ export async function apiFetch(
     throw new Error(
       "Session or sensitive-access mode changed; response discarded",
     );
-  if (response.status === 401)
+  if (
+    response.status === 401 ||
+    response.headers.get("content-type")?.includes("text/html")
+  )
     window.dispatchEvent(new Event("workpaper:access-lost"));
   return response;
 }

@@ -1,4 +1,5 @@
 "use client";
+import {API_BASE} from "@/lib/api-config";
 
 import { useAppNavigation, viewInfo } from "@/components/shell/navigation";
 import {
@@ -28,7 +29,7 @@ import type {
   Overview,
 } from "@/components/workpaper-types";
 
-const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+const API = API_BASE;
 
 type Tab =
   | "return"

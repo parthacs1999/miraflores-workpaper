@@ -1,4 +1,5 @@
 "use client";
+import {API_BASE} from "@/lib/api-config";
 
 import { Pagination } from "./ui/primitives";
 import { useWorkpaperIdentity } from "@/components/session";
@@ -6,7 +7,7 @@ import { apiFetch } from "@/components/session";
 
 import { useCallback, useEffect, useState } from "react";
 
-const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+const API = API_BASE;
 
 export type ReviewFinding = {
   id: string;

@@ -272,8 +272,9 @@ export function AppShell({
                   </>
                 )}
                 <div className="notice warning">
-                  Demo identity selection does not establish authenticated
-                  identity or a legally valid signature.
+                  {identity?.assurance === "verified_access_profile"
+                    ? "Verified gateway identity is bound to a demonstration packet staff profile. No legal signature assurance is claimed."
+                    : "Demo identity selection does not establish authenticated identity or a legally valid signature."}
                 </div>
                 {sessionControls}
               </div>

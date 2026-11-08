@@ -38,7 +38,9 @@
     ".next-e2e/types/**/*.ts",
     ".next-e2e/dev/types/**/*.ts",
     ".next-workflow-e2e/types/**/*.ts",
-    ".next-workflow-e2e/dev/types/**/*.ts"
+    ".next-workflow-e2e/dev/types/**/*.ts",
+    ".next-proxy-e2e/types/**/*.ts",
+    ".next-proxy-e2e/dev/types/**/*.ts"
   ],
   "exclude": [
     "node_modules"

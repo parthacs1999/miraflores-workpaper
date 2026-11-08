@@ -1,0 +1,43 @@
+# REVIEW ONLY: importing a Blueprint can create billable resources. Do not apply yet.
+services:
+  - type: web
+    name: miraflores-workpaper-api
+    runtime: python
+    repo: https://github.com/parthacs1999/miraflores-workpaper
+    branch: main
+    rootDir: backend
+    region: virginia
+    plan: 1c-2g
+    numInstances: 1
+    autoDeployTrigger: "off"
+    buildCommand: pip install -r requirements.txt
+    startCommand: python run_secure.py --hosted
+    healthCheckPath: /health
+    maxShutdownDelaySeconds: 45
+    disk:
+      name: workpaper-data
+      mountPath: /var/data
+      sizeGB: 5
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.13.18
+      - key: PYTHONDONTWRITEBYTECODE
+        value: "1"
+      - key: WEB_CONCURRENCY
+        value: "1"
+      - key: WORKPAPER_ENV
+        value: production
+      - key: WORKPAPER_MODE
+        value: access
+      - key: WORKPAPER_DISK_ROOT
+        value: /var/data
+      - key: REVIEW_DB_PATH
+        value: /var/data/workpaper.db
+      - key: WORKPAPER_ORIGINS
+        sync: false
+      - key: WORKPAPER_ACCESS_ISSUER
+        sync: false
+      - key: WORKPAPER_ACCESS_AUDIENCE
+        sync: false
+      - key: WORKPAPER_ACCESS_STAFF
+        sync: false

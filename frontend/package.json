@@ -7,7 +7,11 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "test:deployment-config": "node --test hosting-config.test.mjs",
+    "test:deployment": "playwright test --config=playwright.deployment.config.ts",
+    "test:assignment-config": "node --test assignment-hosting-config.test.mjs",
+    "test:assignment": "playwright test --config=playwright.assignment.config.ts"
   },
   "dependencies": {
     "lucide-react": "^1.70.0",
@@ -25,5 +29,13 @@
     "eslint-config-next": "16.4.5",
     "tailwindcss": "^4",
     "typescript": "^5"
+  },
+  "engines": {
+    "node": "22.x"
+  },
+  "overrides": {
+    "@typescript-eslint/typescript-estree": {
+      "minimatch": "11.0.5"
+    }
   }
 }

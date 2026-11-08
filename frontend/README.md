@@ -30,7 +30,7 @@ The application preserves the supplied engine packet and displays approved adjus
 ```sh
 npx tsc --noEmit
 npm run lint
-npm run build -- --webpack
+WORKPAPER_LOCAL_BUILD=1 npm run build -- --webpack
 ```
 
 For browser tests, install Chromium once with `npx playwright install chromium`, then run these suites sequentially:
@@ -52,3 +52,5 @@ Both suites start isolated servers and disposable backend databases. See the roo
 - `workflow-tests/`: strict sessions, permissions, workflows, and redesign coverage.
 
 See [UI_REDESIGN.md](../UI_REDESIGN.md) for the component architecture, screenshots, exact implementation manifest, accessibility decisions, and known limitations.
+
+Hosted builds use the same-origin API and must follow [DEPLOYMENT.md](../DEPLOYMENT.md). `WORKPAPER_LOCAL_BUILD=1` is only for an explicit local production preview; it does not override hosted/Vercel guards.

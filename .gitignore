@@ -18,3 +18,18 @@ __pycache__/
 test-results/
 playwright-report/
 .DS_Store
+
+# Sensitive operational exports and backup artifacts
+backups/
+*.backup
+*.backup-*
+*.bak
+*.pem
+*.key
+*.sqlite.sha256
+*.db.sha256
+*.restore-*
+.restore-receipt-*
+.miraflores-service.lock
+# Private assignment access material (generated outside the repository)
+assignment-access/

@@ -247,3 +247,9 @@ The browser suites start their own production frontend and backend servers with 
 | [Phase 6](PHASE6.md) | Simulated filing and post-filing lifecycle |
 | [Phase 7](PHASE7.md) | Collaboration, bulk actions, attachments, operations, and hardening |
 | [UI redesign](UI_REDESIGN.md) | Design system, exact file manifest, screenshots, tests, and complete walkthrough |
+
+## Restricted deployment preparation
+
+Deployment has not been performed. Review [DEPLOYMENT.md](DEPLOYMENT.md), [DEPLOYMENT_SECURITY.md](DEPLOYMENT_SECURITY.md), and [DEPLOYMENT_READINESS.md](DEPLOYMENT_READINESS.md) for hosted startup, verified identity access, persistent SQLite, configuration, tests and outstanding release gates. Public demo staff impersonation is not permitted.
+
+For a separate disposable, token-restricted $0 assignment profile, see [FREE_DEPLOYMENT.md](FREE_DEPLOYMENT.md). Vercel Hobby eligibility and packet-sharing approval are required; a scheduled local HTTPS tunnel is documented as the fallback. This does not replace the secure hosted profile.

@@ -1,0 +1,5 @@
+{
+  "format": "miraflores-empty-assignment-seed-v1",
+  "description": "NON-PRODUCTION. Empty workflow database created by existing migrations. No historical reviews, uploaded attachments, sessions, approvals or filing snapshots are imported.",
+  "import_records": false
+}

@@ -1,4 +1,5 @@
 "use client";
+import {API_BASE} from "@/lib/api-config";
 
 import { apiFetch } from "@/components/session";
 
@@ -6,7 +7,7 @@ import { useEffect, useState } from "react";
 import FieldVerification from "./FieldVerification";
 import type { MatchCandidate } from "./evidence-types";
 
-const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+const API = API_BASE;
 
 type VerificationStatus = "supported" | "unverified" | "missing_source";
 

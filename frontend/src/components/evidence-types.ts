@@ -1,3 +1,4 @@
+import {API_BASE} from "@/lib/api-config";
 import { apiFetch } from "@/components/session";
 export type Resolution = {
   ref: string;
@@ -54,8 +55,7 @@ export type VerificationHistory = {
   latest: VerificationEvent | null;
   events: VerificationEvent[];
 };
-export const EVIDENCE_API =
-  process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+export const EVIDENCE_API = API_BASE;
 export const evidenceControl = "ui-control w-full";
 export const evidenceButton = "ui-button secondary";
 export async function evidenceRequest<T>(

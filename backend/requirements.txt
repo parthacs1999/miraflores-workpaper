@@ -21,3 +21,9 @@ starlette==1.10.0
 typing-inspection==0.4.5
 typing_extensions==4.16.0
 uvicorn==0.54.0
+
+# Verified hosted identity assertions
+PyJWT[crypto]==2.15.1
+cryptography==50.0.2
+cffi==2.1.1
+pycparser==3.12
