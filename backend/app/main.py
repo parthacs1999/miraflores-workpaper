@@ -1,3 +1,6 @@
+import os
+
+from app.security import Settings
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 from fastapi.middleware.cors import CORSMiddleware
@@ -25,12 +28,20 @@ from app.services.source_verification_service import (
     get_source_verification,
     get_source_verification_summary,
 )
+from app.adjustment_api import router as adjustment_router
+from app.evidence_api import router as evidence_router
+from app.reconciliation_api import router as reconciliation_router
 
 app = FastAPI(title="MiraFlores Tax Workpaper API")
+app.include_router(adjustment_router)
+app.include_router(evidence_router)
+app.include_router(reconciliation_router)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=list(Settings.from_env().origins) if Settings.from_env().mode != "legacy_test" else ["http://localhost:3000"] + [
+        origin.strip() for origin in os.environ.get("EXTRA_CORS_ORIGINS", "").split(",") if origin.strip()
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -252,3 +263,26 @@ def source_verification_detail(evidence_id: str):
         )
 
     return result
+
+
+# One boundary covers every existing and future API, including documentation routes.
+from app.workflow_api import router as workflow_router
+from app.security import SecurityBoundary, Settings
+app.include_router(workflow_router)
+from app.change_analysis_api import router as change_router
+app.include_router(change_router)
+from app.lifecycle_api import router as lifecycle_router
+app.include_router(lifecycle_router)
+from app.product_api import router as product_router
+app.include_router(product_router)
+Settings.from_env().validate()
+app.add_middleware(SecurityBoundary)
+
+def create_app(settings):
+    """Explicit settings for isolated strict-mode tests; route contracts are shared."""
+    settings.validate()
+    instance=FastAPI(title="MiraFlores Tax Workpaper API")
+    instance.router.routes.extend(app.router.routes)
+    instance.add_middleware(SecurityBoundary,settings=settings)
+    instance.add_middleware(CORSMiddleware,allow_origins=list(settings.origins),allow_credentials=True,allow_methods=["GET","POST","PATCH","OPTIONS"],allow_headers=["Content-Type","X-CSRF-Token","X-Sensitive-Access","X-Access-Purpose"])
+    return instance

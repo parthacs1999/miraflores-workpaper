@@ -1,4 +1,5 @@
 import os
+import json
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
@@ -30,10 +31,12 @@ def connect():
     path = Path(os.environ.get("REVIEW_DB_PATH", str(DB_PATH)))
     path.parent.mkdir(parents=True, exist_ok=True)
 
+    from app.workflow_connection import WorkflowConnection
     connection = sqlite3.connect(
         path,
         timeout=10,
         isolation_level=None,
+        factory=WorkflowConnection,
     )
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA busy_timeout = 10000")
@@ -68,15 +71,25 @@ def initialize_database():
             )
         """)
 
+    from app.migrate import migrate
+    with connect() as db:
+        migrate(db)
+
+
+def review_catalog(version):
+    from app.services.finding_service import build_catalog
+    base = run_validation(version)
+    return build_catalog(version, legacy=base) if base is not None else None
+
 
 def get_valid_finding(version, finding_id):
-    validation = run_validation(version)
+    validation = review_catalog(version)
 
     if validation is None:
         raise ReviewError("Return version not found", 404)
 
     finding = next(
-        (item for item in validation["findings"] if item["id"] == finding_id),
+        (item for item in validation["findings"] if item["id"] == finding_id or finding_id in item.get("aliases",[])),
         None,
     )
 
@@ -87,7 +100,7 @@ def get_valid_finding(version, finding_id):
 
 
 def list_reviews(version="v3"):
-    validation = run_validation(version)
+    validation = review_catalog(version)
 
     if validation is None:
         raise ReviewError("Return version not found", 404)
@@ -135,8 +148,9 @@ def update_review(
     note,
     actor_role,
     actor_name,
+    audit_details=None,
 ):
-    get_valid_finding(version, finding_id)
+    finding_id = get_valid_finding(version, finding_id)["id"]
 
     if actor_role not in ROLES:
         raise ReviewError("Invalid reviewer role")
@@ -227,6 +241,9 @@ def update_review(
             )
 
             event_id = cursor.lastrowid
+            if audit_details is not None:
+                from app.services.reconciliation_workflow import append_decision
+                append_decision(db,version,finding_id,event_id,audit_details,timestamp)
             db.commit()
 
     return {
@@ -243,7 +260,7 @@ def update_review(
 
 
 def get_review_history(version, finding_id):
-    get_valid_finding(version, finding_id)
+    finding_id = get_valid_finding(version, finding_id)["id"]
     initialize_database()
 
     with connect() as db:

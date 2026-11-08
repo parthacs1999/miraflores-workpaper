@@ -1,36 +1,54 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# MiraFlores frontend
 
-## Getting Started
+The Next.js interface for the MiraFlores Tax Workpaper application. For project features, screenshots, backend installation, security boundaries, and full setup instructions, see the [repository README](../README.md).
 
-First, run the development server:
+## Local development
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+Install dependencies with `npm ci`. Start the backend in a separate terminal:
+
+```sh
+# From the repository root
+cd backend
+.venv/bin/python run_secure.py --demo
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Then start the frontend:
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+```sh
+# From frontend/
+npm run dev
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Open **http://localhost:3000** and select a demonstration staff session. Use the identity menu to switch or end a session; the bell opens live activity and notifications.
 
-## Learn More
+The API defaults to `http://localhost:8000`. Override it with `NEXT_PUBLIC_API_URL` in `.env.local`, then restart Next.js. Use `localhost` consistently for browser and API hosts. Backend cookie, CSRF, Origin, assignment, and clearance checks remain mandatory.
 
-To learn more about Next.js, take a look at the following resources:
+The application preserves the supplied engine packet and displays approved adjustments separately. The real case remains **FILING BLOCKED**. Demo identity selection is not authenticated identity assurance, and simulated lifecycle actions do not create legal signatures or real tax-agency submissions.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Checks
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+```sh
+npx tsc --noEmit
+npm run lint
+npm run build -- --webpack
+```
 
-## Deploy on Vercel
+For browser tests, install Chromium once with `npx playwright install chromium`, then run these suites sequentially:
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+```sh
+npm run test:e2e
+npm run test:e2e -- --config=playwright.workflow.config.ts
+```
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Both suites start isolated servers and disposable backend databases. See the root README for prerequisites and required ports.
+
+## Code and design
+
+- `src/app/`: application entry point, layout, and design-system styles.
+- `src/components/shell/`: navigation, app shell, dashboard, and URL state.
+- `src/components/ui/`: shared controls, tables, dialogs, statuses, and state-machine presentation.
+- `src/components/`: evidence, reconciliation, adjustments, review, collaboration, analysis, and filing workspaces.
+- `tests/`: legacy browser behavior.
+- `workflow-tests/`: strict sessions, permissions, workflows, and redesign coverage.
+
+See [UI_REDESIGN.md](../UI_REDESIGN.md) for the component architecture, screenshots, exact implementation manifest, accessibility decisions, and known limitations.

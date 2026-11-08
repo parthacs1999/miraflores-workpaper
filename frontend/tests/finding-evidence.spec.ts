@@ -1,43 +1,51 @@
+import { clickAction } from "./ui-helpers";
 
 import { test, expect } from "@playwright/test";
 
 test("review finding opens corresponding calculation evidence", async ({
-    page,
+  page,
 }) => {
-    await page.goto("http://localhost:3000");
+  await page.goto(process.env.E2E_BASE_URL ?? "http://localhost:3000");
 
-    await page.getByLabel("Return version").selectOption("v3");
+  await page.getByLabel("Return version").selectOption("v3");
 
-    await page.getByRole("button", {
+  await clickAction(page, async () =>
+    page
+      .getByRole("button", {
         name: "Review Findings",
-    }).click();
+      })
+      .click(),
+  );
 
-    await expect(
-        page.getByRole("heading", {
-            name: "CPA Review Queue",
-        })
-    ).toBeVisible();
+  await expect(
+    page.getByRole("heading", {
+      name: "CPA Review Queue",
+    }),
+  ).toBeVisible();
 
-    const finding = page
-        .getByRole("button")
-        .filter({
-            hasText: "F1040.12:",
-        })
-        .first();
+  await page.getByLabel("Search review findings").fill("F1040.12:");
+  const finding = page
+    .getByRole("button")
+    .filter({
+      hasText: "F1040.12:",
+    })
+    .first();
 
-    await expect(finding).toBeVisible();
-    await finding.click();
+  await expect(finding).toBeVisible();
+  await clickAction(page, async () => finding.click());
 
-    const inspector = page
-        .getByRole("heading", {
-            name: "Evidence Inspector",
-        })
-        .locator("..")
-        .locator("..");
+  const inspector = page
+    .getByRole("heading", {
+      name: "Evidence Inspector",
+    })
+    .locator("..")
+    .locator("..");
 
-    await expect(
-        inspector.getByText("F1040.12", {
-            exact: true,
-        }).first()
-    ).toBeVisible();
+  await expect(
+    inspector
+      .getByText("F1040.12", {
+        exact: true,
+      })
+      .first(),
+  ).toBeVisible();
 });

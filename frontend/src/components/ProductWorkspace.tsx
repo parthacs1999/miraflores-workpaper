@@ -1,0 +1,1346 @@
+"use client";
+import { useConfirm } from "./ui/primitives";
+import { DataTable, StatusBadge, RecordDetails } from "./ui/primitives";
+import { useEffect, useRef, useState } from "react";
+import { apiFetch, useWorkpaperIdentity } from "./session";
+import {
+  EVIDENCE_API,
+  evidenceButton as button,
+  evidenceControl as control,
+  evidenceRequest,
+} from "./evidence-types";
+
+type Item = {
+  id: string;
+  kind: string;
+  area: string;
+  state: string;
+  revision: number;
+  created_by: string;
+  data: Record<string, unknown>;
+};
+type Overview = {
+  items: Item[];
+  areas: string[];
+  staff: { id: string; name: string; role: string }[];
+  clients: { id: string; name: string }[];
+};
+type Selection = {
+  id: string;
+  title: string;
+  area: string;
+  state?: string;
+  expected_revision: number;
+};
+type Budget = {
+  bucket: string;
+  areas: string[];
+  budget_hours: string;
+  original_packet_hours: string;
+  actual_minutes: number;
+  actual_hours: string;
+  remaining_hours: string;
+  over_budget: boolean;
+  revision: number;
+};
+type Operations = {
+  engagements: {
+    id: string;
+    name: string;
+    status: string;
+    owner_id: string;
+    blocking_discussion_note_count: number;
+  }[];
+  scope: string;
+  budgets: Budget[];
+  time_entries: Item[];
+  workload: {
+    staff_id: string;
+    name: string;
+    role: string;
+    actual_minutes: number;
+    open_assignments: number;
+    assignment: unknown;
+  }[];
+  deadlines: {
+    id: string;
+    kind: string;
+    state: string;
+    due_date: string | null;
+    owner_id: string | null;
+    title: string;
+  }[];
+  blockers: { id: string; area: string; state: string; title?: string }[];
+  total_budget_hours: string;
+  total_actual_minutes: number;
+  readiness_blockers: unknown[];
+};
+const Json = ({ value }: { value: unknown }) => <RecordDetails value={value} />;
+const split = (value: string) =>
+  value
+    .split(",")
+    .map((v) => v.trim())
+    .filter(Boolean);
+const label = (v: unknown) => String(v ?? "Not supplied");
+
+export default function ProductWorkspace({
+  operationsOnly = false,
+  section,
+}: {
+  operationsOnly?: boolean;
+  section?: string;
+}) {
+  const confirm = useConfirm();
+  const identity = useWorkpaperIdentity()!;
+  const admin = identity.role === "firm_administrator";
+  const manager = admin || identity.role === "partner";
+  const reviewer = ["reviewer", "partner"].includes(identity.role);
+  const [localTab, setTab] = useState(
+    operationsOnly ? "Firm Operations" : "Evidence Attachments",
+  );
+  const tab = section ?? localTab;
+  const [data, setData] = useState<Overview | null>(null);
+  const [ops, setOps] = useState<Operations | null>(null);
+  const [error, setError] = useState("");
+  const [message, setMessage] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [detail, setDetail] = useState<unknown>(null);
+  const [area, setArea] = useState("business");
+  const [note, setNote] = useState("");
+  const [refs, setRefs] = useState("D14");
+  const [title, setTitle] = useState("Supporting evidence");
+  const [targetKind, setTargetKind] = useState("document");
+  const [targetId, setTargetId] = useState("D14");
+  const [file, setFile] = useState<File | null>(null);
+  const [editing, setEditing] = useState<Item | null>(null);
+  const [purpose, setPurpose] = useState("");
+  const [questionEdit, setQuestionEdit] = useState<Item | null>(null);
+  const [owner, setOwner] = useState("st-01");
+  const [participants, setParticipants] = useState("st-01, st-02, st-03");
+  const [due, setDue] = useState("");
+  const [blocking, setBlocking] = useState(true);
+  const [response, setResponse] = useState("");
+  const [declared, setDeclared] = useState("");
+  const [parent, setParent] = useState("");
+  const [operation, setOperation] = useState(
+    admin ? "assign_tasks" : "acknowledge_findings",
+  );
+  const [catalog, setCatalog] = useState<Selection[]>([]);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [search, setSearch] = useState("");
+  const [page, setPage] = useState(0);
+  const [assignee, setAssignee] = useState("st-01");
+  const pending = useRef<object | null>(null);
+  const [canRetry, setCanRetry] = useState(false);
+  const [batchHistory, setBatchHistory] = useState<Item[]>([]);
+  const [query, setQuery] = useState("");
+  const [bucket, setBucket] = useState("business");
+  const [minutes, setMinutes] = useState("30");
+  const [workDate, setWorkDate] = useState(() =>
+    new Date().toISOString().slice(0, 10),
+  );
+  const [timeEdit, setTimeEdit] = useState<Item | null>(null);
+  const [hours, setHours] = useState("3.5");
+  const rows = (kind: string) =>
+    kind === "p_bulk"
+      ? batchHistory
+      : (data?.items.filter((e) => e.kind === kind) ?? []);
+  async function refresh() {
+    const [o, d, b] = await Promise.all([
+      evidenceRequest<Operations>(
+        "/api/product/operations?q=" + encodeURIComponent(query),
+      ),
+      admin
+        ? Promise.resolve(null)
+        : evidenceRequest<Overview>("/api/product/overview"),
+      evidenceRequest<{ items: Item[] }>("/api/product/bulk/history"),
+    ]);
+    setOps(o);
+    setData(d);
+    setBatchHistory(b.items);
+  }
+  async function loadCatalog() {
+    const c = await evidenceRequest<{ items: Selection[] }>(
+      "/api/product/bulk/catalog?operation=" + operation,
+    );
+    setCatalog(c.items);
+    setSelected(new Set());
+  }
+  useEffect(() => {
+    let active = true;
+    Promise.all([
+      evidenceRequest<Operations>("/api/product/operations"),
+      admin
+        ? Promise.resolve(null)
+        : evidenceRequest<Overview>("/api/product/overview"),
+      evidenceRequest<{ items: Item[] }>("/api/product/bulk/history"),
+    ])
+      .then(([o, d, b]) => {
+        if (active) {
+          setOps(o);
+          setData(d);
+          setBatchHistory(b.items);
+        }
+      })
+      .catch((e) => active && setError(String(e)));
+    return () => {
+      active = false;
+    };
+  }, [admin]);
+  useEffect(() => {
+    let active = true;
+    evidenceRequest<{ items: Selection[] }>(
+      "/api/product/bulk/catalog?operation=" + operation,
+    )
+      .then((c) => {
+        if (active) {
+          setCatalog(c.items);
+          setSelected(new Set());
+          setPage(0);
+        }
+      })
+      .catch((e) => active && setError(String(e)));
+    return () => {
+      active = false;
+    };
+  }, [operation]);
+  useEffect(() => {
+    const update = () => {
+      void refresh().catch((e) => setError(String(e)));
+    };
+    window.addEventListener("workpaper:changes", update);
+    return () => window.removeEventListener("workpaper:changes", update);
+  });
+  async function act(path: string, body: object) {
+    if (
+      /undo|execute|\/(actions|review)$/.test(path) &&
+      !(await confirm({
+        title: "Confirm collaboration action",
+        description:
+          "Each item remains subject to authorization, revision checks and independent review. Undo records compensation and never erases history.",
+      }))
+    )
+      return;
+    setBusy(true);
+    setError("");
+    setMessage("");
+    try {
+      const r = await evidenceRequest<Item>("/api/product" + path, body);
+      await refresh();
+      setMessage(
+        "Saved with append-only history. No tax calculation or filing approval was implied.",
+      );
+      return r;
+    } catch (e) {
+      setError(String(e));
+      return null;
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function audit(id: string) {
+    try {
+      setDetail(
+        await evidenceRequest("/api/product/history/" + encodeURIComponent(id)),
+      );
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+  async function upload() {
+    if (!file) return;
+    setBusy(true);
+    setError("");
+    try {
+      if (file.size > 5 * 1024 * 1024)
+        throw new Error("Evidence exceeds the 5 MiB limit");
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      let binary = "";
+      for (let i = 0; i < bytes.length; i += 32768)
+        binary += String.fromCharCode(...bytes.subarray(i, i + 32768));
+      await act("/attachments", {
+        area,
+        title,
+        note,
+        filename: file.name,
+        media_type: file.type || "text/plain",
+        content_base64: btoa(binary),
+        links: [{ kind: targetKind, id: targetId }],
+      });
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function download(row: Item) {
+    if (
+      purpose.trim().length >= 8 &&
+      !(await confirm({
+        title: "Download protected original?",
+        description:
+          "This unprocessed original may contain sensitive information. Your purpose and access will be audited; the immutable content hash is verified before download.",
+      }))
+    )
+      return;
+    setError("");
+    try {
+      if (purpose.trim().length < 8)
+        throw new Error(
+          "Enter a meaningful purpose for downloading an unprocessed original",
+        );
+      const r = await apiFetch(
+        EVIDENCE_API + "/api/product/attachments/" + row.id + "/download",
+        {
+          headers: {
+            "X-Sensitive-Access": "reveal",
+            "X-Access-Purpose": purpose,
+          },
+        },
+      );
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.detail);
+      const bytes = Uint8Array.from(atob(d.content_base64), (c) =>
+        c.charCodeAt(0),
+      );
+      const hash = Array.from(
+        new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)),
+      )
+        .map((b) => b.toString(16).padStart(2, "0"))
+        .join("");
+      if (hash !== d.sha256)
+        throw new Error("Content fingerprint mismatch; download stopped");
+      const url = URL.createObjectURL(
+        new Blob([bytes], { type: "application/octet-stream" }),
+      );
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = d.filename;
+      a.click();
+      URL.revokeObjectURL(url);
+      setMessage(
+        "Original downloaded with access audit; SHA-256 verified. Not extracted or automatically verified.",
+      );
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+  async function applyBulk(retry = false) {
+    setBusy(true);
+    setError("");
+    try {
+      const body = retry
+        ? pending.current
+        : {
+            operation,
+            command_key: crypto.randomUUID(),
+            note,
+            items: catalog
+              .filter((c) => selected.has(c.id))
+              .map(({ id, expected_revision }) => ({ id, expected_revision })),
+            assignee: operation === "assign_tasks" ? assignee : null,
+          };
+      if (!body) throw new Error("No failed bulk request to retry");
+      pending.current = body;
+      setCanRetry(true);
+      const r = await evidenceRequest<Item>("/api/product/bulk", body);
+      setDetail(r);
+      setCanRetry(false);
+      pending.current = null;
+      await refresh();
+      await loadCatalog();
+      setMessage(
+        "Atomic bulk action saved. Acknowledgment means seen, never independently verified or approved.",
+      );
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+  const filtered = catalog.filter((c) =>
+    (c.id + " " + c.title + " " + c.area)
+      .toLowerCase()
+      .includes(search.toLowerCase()),
+  );
+  const displayed = filtered.slice(page * 40, (page + 1) * 40);
+  const availableTabs = operationsOnly
+    ? ["Firm Operations", ...(manager ? ["Bulk Actions"] : [])]
+    : [
+        "Evidence Attachments",
+        "Questions & Responses",
+        "Bulk Actions",
+        "Firm Operations",
+      ];
+  return (
+    <section
+      className="feature-workspace space-y-4"
+      data-testid="product-workspace"
+    >
+      <header>
+        <h2 className="text-2xl font-semibold">
+          {section ??
+            (operationsOnly ? "Firm Operations" : "Workpaper Collaboration")}
+        </h2>
+        <p>
+          Single supplied invented engagement. Staff-mediated client statements
+          are not authenticated communications or legal signatures.
+        </p>
+      </header>
+      <nav
+        hidden={!!section}
+        aria-label="Collaboration sections"
+        className="flex flex-wrap gap-2"
+      >
+        {availableTabs.map((t) => (
+          <button
+            key={t}
+            className={button + (tab === t ? " bg-indigo-100" : "")}
+            aria-pressed={tab === t}
+            onClick={() => {
+              setTab(t);
+              setDetail(null);
+            }}
+          >
+            {t}
+          </button>
+        ))}
+      </nav>
+      {error && (
+        <p role="alert" className="rounded bg-red-100 p-3">
+          {error}
+        </p>
+      )}
+      {message && (
+        <p role="status" className="rounded bg-green-50 p-3">
+          {message}
+        </p>
+      )}
+      {!ops && <p>Loading authorized operational records…</p>}
+      <div className="collaboration-context">
+        <label className="block">
+          Documented rationale
+          <textarea
+            aria-label="Product rationale"
+            className={control}
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+          />
+        </label>
+        {!admin && (
+          <label className="block">
+            Workpaper area
+            <select
+              aria-label="Product area"
+              className={control}
+              value={area}
+              onChange={(e) => setArea(e.target.value)}
+            >
+              {(data?.areas ?? ["business"]).map((a) => (
+                <option key={a}>{a}</option>
+              ))}
+            </select>
+          </label>
+        )}
+      </div>
+      {tab === "Evidence Attachments" && data && (
+        <section className="product-panel space-y-3">
+          <h3 className="text-lg font-semibold">
+            Immutable evidence originals
+          </h3>
+          <p>
+            PDF, PNG, JPEG or UTF-8 text; maximum 5 MiB. Upload is not
+            extraction. Originals never render inline and require cleared,
+            purpose-audited downloads.
+          </p>
+          <label>
+            Evidence title
+            <input
+              aria-label="Attachment title"
+              className={control}
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+            />
+          </label>
+          <label>
+            Target type
+            <select
+              aria-label="Attachment target type"
+              className={control}
+              value={targetKind}
+              onChange={(e) => setTargetKind(e.target.value)}
+            >
+              {[
+                "document",
+                "finding",
+                "adjustment",
+                "note",
+                "workflow",
+                "question",
+              ].map((k) => (
+                <option key={k}>{k}</option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Target ID
+            <input
+              aria-label="Attachment target ID"
+              className={control}
+              value={targetId}
+              onChange={(e) => setTargetId(e.target.value)}
+            />
+          </label>
+          <label>
+            Evidence file
+            <input
+              aria-label="Evidence file"
+              className={control}
+              type="file"
+              accept=".pdf,.png,.jpg,.jpeg,.txt"
+              onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+            />
+          </label>
+          <button
+            className={button}
+            disabled={
+              busy || !file || !note.trim() || !title.trim() || !targetId.trim()
+            }
+            onClick={() => void upload()}
+          >
+            Upload supporting evidence
+          </button>
+          {editing && (
+            <>
+              <button
+                className={button}
+                disabled={busy || !note.trim() || !title.trim()}
+                onClick={() =>
+                  void act("/attachments/" + editing.id + "/actions", {
+                    action: "metadata",
+                    expected_revision: editing.revision,
+                    title,
+                    links: [{ kind: targetKind, id: targetId }],
+                    note,
+                  }).then((r) => r && setEditing(null))
+                }
+              >
+                Save attachment metadata revision
+              </button>
+              <button className={button} onClick={() => setEditing(null)}>
+                Cancel metadata edit
+              </button>
+            </>
+          )}
+          <label>
+            Original access purpose
+            <input
+              aria-label="Attachment access purpose"
+              className={control}
+              value={purpose}
+              onChange={(e) => setPurpose(e.target.value)}
+            />
+          </label>
+          {!rows("p_attachment").length && <p>No uploaded evidence yet.</p>}
+          {rows("p_attachment").map((a) => (
+            <article
+              className="space-y-2 rounded border p-3"
+              key={a.id}
+              data-testid="attachment-card"
+            >
+              <strong>{label(a.data.title)}</strong> · {a.state}
+              <p className="break-all text-xs">
+                {a.id} · SHA-256 {label(a.data.sha256)}
+              </p>
+              <p>
+                {label(a.data.filename)} · {label(a.data.size)} bytes ·{" "}
+                {label(a.data.processing)} · {label(a.data.verification)}
+              </p>
+              <Json value={a.data.links} />
+              <button
+                className={button}
+                disabled={!identity.sensitive_data_clearance || busy}
+                onClick={() => void download(a)}
+              >
+                Download original {a.id}
+              </button>
+              <button
+                className={button}
+                onClick={() => {
+                  setEditing(a);
+                  setTitle(label(a.data.title));
+                  const link = (
+                    a.data.links as { kind: string; id: string }[]
+                  )[0];
+                  setTargetKind(link.kind);
+                  setTargetId(link.id);
+                }}
+              >
+                Edit metadata {a.id}
+              </button>
+              {reviewer && a.state === "unreviewed" && (
+                <button
+                  className={button}
+                  disabled={busy || !note.trim()}
+                  onClick={() =>
+                    void act("/attachments/" + a.id + "/actions", {
+                      action: "review",
+                      expected_revision: a.revision,
+                      note,
+                    })
+                  }
+                >
+                  Record independent support review {a.id}
+                </button>
+              )}
+              <button className={button} onClick={() => void audit(a.id)}>
+                Attachment history {a.id}
+              </button>
+            </article>
+          ))}
+        </section>
+      )}
+      {tab === "Questions & Responses" && data && (
+        <section className="product-panel space-y-3">
+          <h3 className="text-lg font-semibold">
+            Persistent workpaper discussions
+          </h3>
+          <label>
+            Question title
+            <input
+              aria-label="Question title"
+              className={control}
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+            />
+          </label>
+          <label>
+            Owner
+            <select
+              aria-label="Question owner"
+              className={control}
+              value={owner}
+              onChange={(e) => setOwner(e.target.value)}
+            >
+              {data.staff.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.id} {s.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Staff participants
+            <input
+              aria-label="Question participants"
+              className={control}
+              value={participants}
+              onChange={(e) => setParticipants(e.target.value)}
+            />
+          </label>
+          <label>
+            Due date
+            <input
+              aria-label="Question deadline"
+              type="date"
+              className={control}
+              value={due}
+              onChange={(e) => setDue(e.target.value)}
+            />
+          </label>
+          <label>
+            <input
+              type="checkbox"
+              aria-label="Question blocks filing"
+              checked={blocking}
+              onChange={(e) => setBlocking(e.target.checked)}
+            />{" "}
+            Blocks filing until independently resolved
+          </label>
+          <label>
+            Supporting references
+            <input
+              aria-label="Product evidence references"
+              className={control}
+              value={refs}
+              onChange={(e) => setRefs(e.target.value)}
+              placeholder="D14, attachment:…"
+            />
+          </label>
+          <button
+            className={button}
+            disabled={busy || !note.trim() || !title.trim()}
+            onClick={() =>
+              void act("/questions", {
+                area,
+                title,
+                note,
+                owner_id: owner,
+                participants: split(participants),
+                due_date: due || null,
+                blocking,
+                refs: split(refs),
+              })
+            }
+          >
+            Create workpaper question
+          </button>
+          {questionEdit && (
+            <>
+              <button
+                className={button}
+                disabled={busy || !note.trim() || !title.trim()}
+                onClick={() =>
+                  void act("/questions/" + questionEdit.id + "/metadata", {
+                    expected_revision: questionEdit.revision,
+                    title,
+                    note,
+                    owner_id: owner,
+                    participants: split(participants),
+                    due_date: due || null,
+                    blocking,
+                    refs: split(refs),
+                  }).then((r) => r && setQuestionEdit(null))
+                }
+              >
+                Save question metadata revision
+              </button>
+              <button className={button} onClick={() => setQuestionEdit(null)}>
+                Cancel question edit
+              </button>
+            </>
+          )}
+          {rows("p_question").length > 0 && (
+            <div className="discussion-reply-form">
+              {" "}
+              <label>
+                Response / reply
+                <textarea
+                  aria-label="Discussion response"
+                  className={control}
+                  value={response}
+                  onChange={(e) => setResponse(e.target.value)}
+                />
+              </label>
+              <label>
+                Declared response source
+                <select
+                  aria-label="Declared response source"
+                  className={control}
+                  value={declared}
+                  onChange={(e) => setDeclared(e.target.value)}
+                >
+                  <option value="">Staff session response</option>
+                  {data.clients.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name} · staff-mediated demonstration
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Reply parent ID (optional)
+                <input
+                  aria-label="Reply parent ID"
+                  className={control}
+                  value={parent}
+                  onChange={(e) => setParent(e.target.value)}
+                />
+              </label>
+            </div>
+          )}
+          {!rows("p_question").length && (
+            <div className="empty-collaboration">
+              <strong>No collaboration questions yet.</strong>
+              <p>
+                Document a question above, assign its owner, and link source
+                evidence. Blocking questions require independent resolution.
+              </p>
+            </div>
+          )}
+          {rows("p_question").map((q) => (
+            <article
+              className="space-y-2 rounded border p-3"
+              key={q.id}
+              data-testid="question-card"
+            >
+              <strong>{label(q.data.title)}</strong> · {q.state} ·{" "}
+              {q.data.blocking ? "BLOCKING" : "Nonblocking"}
+              <p>
+                {q.id} · {q.area} · owner {label(q.data.owner_id)} · due{" "}
+                {label(q.data.due_date)}
+              </p>
+              <p>{label(q.data.note)}</p>
+              <p>
+                Participants: {(q.data.participants as string[]).join(", ")}
+              </p>
+              <button
+                className={button}
+                onClick={() => {
+                  setQuestionEdit(q);
+                  setTitle(label(q.data.title));
+                  setOwner(label(q.data.owner_id));
+                  setParticipants((q.data.participants as string[]).join(", "));
+                  setDue(String(q.data.due_date ?? ""));
+                  setBlocking(Boolean(q.data.blocking));
+                  setRefs((q.data.refs as string[]).join(", "));
+                  setArea(q.area);
+                }}
+              >
+                Edit question metadata {q.id}
+              </button>
+              <ul>
+                {rows("p_message")
+                  .filter((m) => m.data.question_id === q.id)
+                  .map((m) => (
+                    <li
+                      key={m.id}
+                      className={
+                        "my-2 border-l-2 p-2 " +
+                        (m.data.parent_id ? "ml-6" : "")
+                      }
+                    >
+                      <p>{label(m.data.note)}</p>
+                      <p className="text-xs">
+                        {m.id} · reply to {label(m.data.parent_id)} ·{" "}
+                        {label(m.data.assurance)} · operator{" "}
+                        {label(m.data.recorded_by)}
+                      </p>
+                      <Json value={m.data.refs} />
+                      <button
+                        className={button}
+                        onClick={() => setParent(m.id)}
+                      >
+                        Reply to {m.id}
+                      </button>
+                    </li>
+                  ))}
+              </ul>
+              {["open", "answered"].includes(q.state) && (
+                <button
+                  className={button}
+                  disabled={busy || !response.trim()}
+                  onClick={() =>
+                    void act("/questions/" + q.id + "/messages", {
+                      expected_revision: q.revision,
+                      note: response,
+                      parent_id: parent || null,
+                      declared_client_id: declared || null,
+                      refs: split(refs),
+                    }).then((r) => {
+                      if (r) {
+                        setResponse("");
+                        setParent("");
+                      }
+                    })
+                  }
+                >
+                  Record response {q.id}
+                </button>
+              )}
+              {(q.state === "answered"
+                ? ["request_resolution"]
+                : q.state === "awaiting_review" && reviewer
+                  ? ["resolve"]
+                  : q.state === "resolved"
+                    ? ["reopen"]
+                    : []
+              ).map((action) => (
+                <button
+                  className={button}
+                  key={action}
+                  disabled={busy || !note.trim()}
+                  onClick={() =>
+                    void act("/questions/" + q.id + "/actions", {
+                      action,
+                      expected_revision: q.revision,
+                      note,
+                    })
+                  }
+                >
+                  {action.replaceAll("_", " ")} {q.id}
+                </button>
+              ))}
+              <button className={button} onClick={() => void audit(q.id)}>
+                Question history {q.id}
+              </button>
+            </article>
+          ))}
+        </section>
+      )}
+      {tab === "Bulk Actions" && (
+        <section className="product-panel space-y-3">
+          <h3 className="text-lg font-semibold">
+            Atomic multi-select actions and compensating undo
+          </h3>
+          <p>
+            Acknowledgment means seen, never resolved or verified. Undo
+            preserves every event, requires unchanged items and never restores
+            signatures or submitted filing state.
+          </p>
+          <label>
+            Bulk operation
+            <select
+              aria-label="Bulk operation"
+              className={control}
+              value={operation}
+              onChange={(e) => {
+                setOperation(e.target.value);
+                setSearch("");
+              }}
+            >
+              {(admin
+                ? ["assign_tasks"]
+                : [
+                    "acknowledge_findings",
+                    "acknowledge_documents",
+                    "submit_records",
+                    ...(manager ? ["assign_tasks"] : []),
+                  ]
+              ).map((o) => (
+                <option key={o}>{o}</option>
+              ))}
+            </select>
+          </label>
+          {operation === "assign_tasks" && (
+            <label>
+              Task assignee
+              <select
+                aria-label="Bulk assignee"
+                className={control}
+                value={assignee}
+                onChange={(e) => setAssignee(e.target.value)}
+              >
+                {(ops?.workload ?? []).map((s) => (
+                  <option key={s.staff_id} value={s.staff_id}>
+                    {s.name} ({s.staff_id})
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+          <label>
+            Search bulk items
+            <input
+              aria-label="Search bulk items"
+              className={control}
+              value={search}
+              onChange={(e) => {
+                setSearch(e.target.value);
+                setPage(0);
+              }}
+            />
+          </label>
+          <button
+            className={button}
+            onClick={() => setSelected(new Set(displayed.map((i) => i.id)))}
+          >
+            Select this page
+          </button>
+          <button className={button} onClick={() => setSelected(new Set())}>
+            Clear selection
+          </button>
+          <p>
+            {selected.size} selected · {filtered.length} available · page{" "}
+            {page + 1}
+          </p>
+          <fieldset className="max-h-80 overflow-auto">
+            <legend>Select work items</legend>
+            {displayed.map((c) => (
+              <label key={c.id} className="block border-t p-2">
+                <input
+                  type="checkbox"
+                  aria-label={"Select " + c.id}
+                  checked={selected.has(c.id)}
+                  onChange={(e) =>
+                    setSelected((old) => {
+                      const next = new Set(old);
+                      if (e.target.checked) next.add(c.id);
+                      else next.delete(c.id);
+                      return next;
+                    })
+                  }
+                />{" "}
+                {c.title} · {c.id} · {c.area} · {c.state ?? "not acknowledged"}
+              </label>
+            ))}
+          </fieldset>
+          {!filtered.length && (
+            <p>
+              No eligible items. Completed, acknowledged or inaccessible items
+              are excluded.
+            </p>
+          )}
+          <button
+            className={button}
+            disabled={page === 0}
+            onClick={() => setPage((p) => p - 1)}
+          >
+            Previous items
+          </button>
+          <button
+            className={button}
+            disabled={(page + 1) * 40 >= filtered.length}
+            onClick={() => setPage((p) => p + 1)}
+          >
+            Next items
+          </button>
+          <button
+            className={button}
+            disabled={
+              busy || !selected.size || selected.size > 50 || !note.trim()
+            }
+            onClick={() => void applyBulk()}
+          >
+            Apply atomic bulk action
+          </button>
+          {canRetry && (
+            <button
+              className={button}
+              disabled={busy}
+              onClick={() => void applyBulk(true)}
+            >
+              Retry identical bulk request
+            </button>
+          )}
+          <button
+            className={button}
+            disabled={busy}
+            onClick={() => void loadCatalog().catch((e) => setError(String(e)))}
+          >
+            Reload bulk items
+          </button>
+          {rows("p_bulk").map((b) => (
+            <article
+              key={b.id}
+              className="workflow-card"
+              data-testid="bulk-record"
+            >
+              {b.id} · {label(b.data.operation)} · {b.state}
+              <button className={button} onClick={() => void audit(b.id)}>
+                Bulk history {b.id}
+              </button>
+              {b.state === "applied" && (
+                <button
+                  className={button}
+                  disabled={busy || !note.trim()}
+                  onClick={() =>
+                    void act("/bulk/" + b.id + "/undo", {
+                      expected_revision: b.revision,
+                      note,
+                    }).then((r) => r && loadCatalog())
+                  }
+                >
+                  Undo with compensation {b.id}
+                </button>
+              )}
+            </article>
+          ))}
+        </section>
+      )}
+      {tab === "Firm Operations" && ops && (
+        <section className="product-panel space-y-3">
+          <h3 className="text-lg font-semibold">
+            Engagement search, workload and budgets
+          </h3>
+          <p>{ops.scope}</p>
+          <label>
+            Engagement search
+            <input
+              aria-label="Engagement search"
+              className={control}
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+            />
+          </label>
+          <button
+            className={button}
+            onClick={() => void refresh().catch((e) => setError(String(e)))}
+          >
+            Search engagements
+          </button>
+          {!ops.engagements.length && <p>No matching supplied engagements.</p>}
+          {ops.engagements.map((e) => (
+            <article key={e.id} className="workflow-card">
+              {e.id} · {e.name} · {e.status} · owner {e.owner_id}
+              <p>
+                Open blocking discussions/notes:{" "}
+                {e.blocking_discussion_note_count}. Full readiness remains in
+                the Readiness workspace.
+              </p>
+            </article>
+          ))}
+          <p data-testid="operations-totals">
+            Budget {ops.total_budget_hours} hours · actual{" "}
+            {ops.total_actual_minutes} minutes
+          </p>
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-sm">
+              <caption>
+                Budget versus actual — packet hours and separately recorded work
+              </caption>
+              <thead>
+                <tr>
+                  {[
+                    "Area",
+                    "Original hours",
+                    "Current budget",
+                    "Actual hours",
+                    "Remaining hours",
+                  ].map((h) => (
+                    <th scope="col" key={h} className="p-2">
+                      {h}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {ops.budgets.map((b) => (
+                  <tr key={b.bucket} className="border-t">
+                    <th scope="row" className="p-2">
+                      {b.bucket}
+                    </th>
+                    <td>{b.original_packet_hours}</td>
+                    <td>{b.budget_hours}</td>
+                    <td>{b.actual_hours}</td>
+                    <td>
+                      {b.remaining_hours}
+                      {b.over_budget ? " · OVER BUDGET" : ""}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <label>
+            Time / budget bucket
+            <select
+              aria-label="Operations bucket"
+              className={control}
+              value={bucket}
+              onChange={(e) => {
+                setBucket(e.target.value);
+                setTimeEdit(null);
+                const b = ops.budgets.find((b) => b.bucket === e.target.value);
+                setHours(b?.budget_hours ?? "0");
+                if (b && !b.areas.includes(area)) setArea(b.areas[0]);
+              }}
+            >
+              {ops.budgets.map((b) => (
+                <option key={b.bucket}>{b.bucket}</option>
+              ))}
+            </select>
+          </label>
+          {!admin && (
+            <>
+              <label>
+                Work date
+                <input
+                  type="date"
+                  aria-label="Time work date"
+                  className={control}
+                  value={workDate}
+                  onChange={(e) => setWorkDate(e.target.value)}
+                />
+              </label>
+              <label>
+                Minutes
+                <input
+                  type="number"
+                  min="1"
+                  max="1440"
+                  aria-label="Time minutes"
+                  className={control}
+                  value={minutes}
+                  onChange={(e) => setMinutes(e.target.value)}
+                />
+              </label>
+              <button
+                className={button}
+                disabled={busy || !note.trim()}
+                onClick={() =>
+                  void act("/time", {
+                    id: timeEdit?.id ?? null,
+                    area,
+                    bucket,
+                    minutes: Number(minutes),
+                    work_date: workDate,
+                    note,
+                    state: "recorded",
+                    expected_revision: timeEdit?.revision ?? 0,
+                  }).then((r) => r && setTimeEdit(null))
+                }
+              >
+                {timeEdit ? "Save time revision" : "Record actual time"}
+              </button>
+            </>
+          )}
+          {manager && (
+            <>
+              <label>
+                Budget hours
+                <input
+                  type="number"
+                  min="0"
+                  step=".01"
+                  aria-label="Budget hours"
+                  className={control}
+                  value={hours}
+                  onChange={(e) => setHours(e.target.value)}
+                />
+              </label>
+              <button
+                className={button}
+                disabled={busy || !note.trim()}
+                onClick={() =>
+                  void act("/budgets", {
+                    bucket,
+                    hours,
+                    note,
+                    expected_revision:
+                      ops.budgets.find((b) => b.bucket === bucket)?.revision ??
+                      0,
+                  })
+                }
+              >
+                Save budget revision
+              </button>
+            </>
+          )}
+          <h4 className="font-semibold">Recorded time</h4>
+          {!ops.time_entries.length && (
+            <p>
+              No actual time has been recorded; packet budgets are estimates
+              only.
+            </p>
+          )}
+          {ops.time_entries.map((t) => (
+            <article key={t.id} className="rounded border p-2">
+              {t.created_by} · {label(t.data.work_date)} ·{" "}
+              {label(t.data.minutes)} minutes · {t.state}
+              {t.created_by === identity.id && (
+                <>
+                  <button
+                    className={button}
+                    onClick={() => {
+                      setTimeEdit(t);
+                      setArea(t.area);
+                      setBucket(label(t.data.bucket));
+                      setMinutes(label(t.data.minutes));
+                      setWorkDate(label(t.data.work_date));
+                    }}
+                  >
+                    Edit time {t.id}
+                  </button>
+                  <button
+                    className={button}
+                    disabled={busy || !note.trim() || t.state === "voided"}
+                    onClick={() =>
+                      void act("/time", {
+                        id: t.id,
+                        area: t.area,
+                        bucket: t.data.bucket,
+                        minutes: t.data.minutes,
+                        work_date: t.data.work_date,
+                        note,
+                        state: "voided",
+                        expected_revision: t.revision,
+                      })
+                    }
+                  >
+                    Void time {t.id}
+                  </button>
+                  <button className={button} onClick={() => void audit(t.id)}>
+                    Time history {t.id}
+                  </button>
+                </>
+              )}
+            </article>
+          ))}
+          <h4 className="font-semibold">Staff workload and assignments</h4>
+          <DataTable
+            rows={ops.workload}
+            rowKey={(r) => r.staff_id}
+            columns={[
+              {
+                key: "staff",
+                label: "Staff",
+                render: (r) => (
+                  <>
+                    <strong>{r.name}</strong>
+                    <small className="block muted">{r.staff_id}</small>
+                  </>
+                ),
+              },
+              {
+                key: "role",
+                label: "Role",
+                render: (r) => r.role.replace(/_/g, " "),
+              },
+              {
+                key: "assignments",
+                label: "Open assignments",
+                render: (r) => r.open_assignments,
+              },
+              {
+                key: "time",
+                label: "Recorded minutes",
+                render: (r) => r.actual_minutes,
+              },
+              {
+                key: "scope",
+                label: "Assignment scope",
+                render: (r) => (
+                  <details>
+                    <summary>View assignment</summary>
+                    <Json value={r.assignment} />
+                  </details>
+                ),
+              },
+            ]}
+          />
+          <h4 className="font-semibold">Deadline overview</h4>
+          <DataTable
+            rows={ops.deadlines}
+            rowKey={(r) => r.id}
+            columns={[
+              { key: "title", label: "Deadline", render: (r) => r.title },
+              {
+                key: "due",
+                label: "Due date",
+                render: (r) => r.due_date ?? "Not supplied",
+              },
+              {
+                key: "owner",
+                label: "Owner",
+                render: (r) => r.owner_id ?? "Unassigned",
+              },
+              {
+                key: "state",
+                label: "Status",
+                render: (r) => <StatusBadge value={r.state} />,
+              },
+            ]}
+          />
+          <h4 className="font-semibold">
+            Outstanding blocking discussions / notes
+          </h4>
+          <Json value={ops.blockers} />
+          <h4 className="font-semibold">Filing readiness blockers</h4>
+          <Json value={ops.readiness_blockers} />
+        </section>
+      )}
+      {detail !== null && (
+        <section>
+          <h3 className="font-semibold">Audited record detail</h3>
+          <div data-testid="product-detail">
+            <Json value={detail} />
+          </div>
+          <button className={button} onClick={() => setDetail(null)}>
+            Close product detail
+          </button>
+        </section>
+      )}
+    </section>
+  );
+}

@@ -5,6 +5,8 @@ from decimal import Decimal, InvalidOperation
 from functools import lru_cache
 from pathlib import Path
 
+from app.services.field_match_service import source_candidates
+
 PACKET_PATH = Path(__file__).resolve().parents[2] / "data" / "Instructions.json"
 
 
@@ -174,6 +176,10 @@ def verify_extracted_value(evidence, documents):
         "reason": "",
         "match": None,
         "printed_content": None,
+        "assessment": "missing_source",
+        "candidates": [],
+        "automatic": True,
+        "human_verified": False,
     }
 
     if document is None:
@@ -204,21 +210,9 @@ def verify_extracted_value(evidence, documents):
 
     result["printed_content"] = printed_content
 
-    match = find_supporting_text(evidence, printed_content)
-
-    if match:
-        result["status"] = "supported"
-        result["match"] = match
-        result["reason"] = (
-            "A matching value was located in the simulated "
-            "source page. Field-level attribution still requires review."
-        )
-    else:
-        result["status"] = "unverified"
-        result["reason"] = (
-            "No equivalent value was located using the current "
-            "matching rules. This is not proof of an extraction error."
-        )
+    analysis = source_candidates(evidence, printed_content)
+    result.update(analysis)
+    result['status'] = 'supported' if analysis['assessment'] == 'field_supported' else 'unverified'
 
     return result
 

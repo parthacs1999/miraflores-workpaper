@@ -1,0 +1,1426 @@
+"use client";
+import { useConfirm } from "./ui/primitives";
+import { StateMachine } from "./ui/StateMachine";
+import { RecordDetails } from "./ui/primitives";
+import { useEffect, useState } from "react";
+import {
+  evidenceRequest,
+  evidenceButton as button,
+  evidenceControl as control,
+} from "./evidence-types";
+import { useWorkpaperIdentity } from "./session";
+type Item = {
+  id: string;
+  kind: string;
+  state: string;
+  revision: number;
+  authors: string[];
+  data: Record<string, unknown>;
+};
+type Snapshot = {
+  display_name: string;
+  id: string;
+  content_hash: string;
+  version: string;
+  purpose: string;
+  mode: string;
+  validity: string;
+  parent_id: string | null;
+  created_at: string;
+};
+type Package = {
+  id: string;
+  kind: string;
+  snapshot_id: string;
+  content_hash: string;
+  resource_id?: string;
+};
+type Overview = {
+  disclaimer: string;
+  snapshots: Snapshot[];
+  records: Item[];
+  packages: Package[];
+  clients: { id: string; name: string }[];
+  staff: { id: string; name: string; role: string }[];
+  payment_catalog: {
+    source_ref: string;
+    jurisdiction: string;
+    tax_year: number;
+    date: string;
+    amount: string;
+    classification: string;
+    description: string;
+  }[];
+  payment_reconciliations: unknown[];
+  packet_notices: {
+    id: string;
+    type: string;
+    tax_year: number;
+    response_due?: string;
+    dated: string;
+  }[];
+  planning_reference: unknown;
+  external_confirmation_support: string;
+};
+type Download = {
+  id: string;
+  kind: string;
+  canonical_content_hash: string;
+  delivered_content_hash: string;
+  download_json: string;
+  content: Record<string, unknown>;
+};
+const tabs = [
+  "Finalization",
+  "Extensions & Payments",
+  "Filing Status",
+  "Client Authorization",
+  "Amendments",
+  "Notices & Examination",
+  "Carryovers & Planning",
+];
+const text = (value: unknown) =>
+  value === null || value === undefined
+    ? "Not supplied"
+    : typeof value === "object"
+      ? JSON.stringify(value)
+      : String(value);
+const Json = ({ value }: { value: unknown }) => <RecordDetails value={value} />;
+
+export default function FilingLifecycleWorkspace({
+  section,
+  onSectionChange,
+}: {
+  section?: string;
+  onSectionChange?: (section: string) => void;
+}) {
+  const confirm = useConfirm();
+  const identity = useWorkpaperIdentity();
+  const reviewer = identity && ["reviewer", "partner"].includes(identity.role);
+  const partner = identity?.role === "partner";
+  const [localTab, setLocalTab] = useState(tabs[0]);
+  const tab = section ?? localTab;
+  const setTab = (next: string) => {
+    setLocalTab(next);
+    onSectionChange?.(next);
+  };
+  const [data, setData] = useState<Overview | null>(null);
+  const [error, setError] = useState("");
+  const [message, setMessage] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [snapshotId, setSnapshotId] = useState("");
+  const [note, setNote] = useState("");
+  const [references, setReferences] = useState("D01");
+  const [history, setHistory] = useState<unknown>(null);
+  const [download, setDownload] = useState<Download | null>(null);
+  const [version, setVersion] = useState("v3");
+  const [mode, setMode] = useState("demonstration");
+  const [supersedes, setSupersedes] = useState("");
+  const [jurisdiction, setJurisdiction] = useState("federal");
+  const [paymentRef, setPaymentRef] = useState(
+    "agency:/irs_account_transcript_2025/0/transactions/0",
+  );
+  const [clientId, setClientId] = useState("cu-01");
+  const [expires, setExpires] = useState(() =>
+    new Date(Date.now() + 86400000).toISOString().slice(0, 19),
+  );
+  const [amendmentId, setAmendmentId] = useState("");
+  const [owner, setOwner] = useState("st-01");
+  const [noticeId, setNoticeId] = useState("N-2025-L566");
+  const [manualNotice, setManualNotice] = useState(false);
+  const [noticeTitle, setNoticeTitle] = useState(
+    "California demonstration balance-due question",
+  );
+  const [noticeDate, setNoticeDate] = useState(() =>
+    new Date().toISOString().slice(0, 10),
+  );
+  const [deadline, setDeadline] = useState("");
+  const [adjusted, setAdjusted] = useState("");
+  const [authority, setAuthority] = useState("");
+  const refs = references
+    .split(",")
+    .map((v) => v.trim())
+    .filter(Boolean);
+  const hasNote = !!note.trim();
+  const rows = (kind: string) =>
+    data?.records.filter((r) => r.kind === kind) ?? [];
+  async function refresh() {
+    setData(await evidenceRequest<Overview>("/api/lifecycle/overview"));
+  }
+  useEffect(() => {
+    let active = true;
+    evidenceRequest<Overview>("/api/lifecycle/overview")
+      .then((d) => active && setData(d))
+      .catch((e) => active && setError(String(e)));
+    return () => {
+      active = false;
+    };
+  }, []);
+  async function act(
+    path: string,
+    body: object,
+    callback?: (value: Record<string, unknown>) => void,
+  ) {
+    if (
+      !(await confirm({
+        title: "Confirm simulated lifecycle action",
+        description:
+          "This records an auditable demonstration action. No tax agency transmission, payment transfer, client authentication or legal signature will occur.",
+      }))
+    )
+      return;
+    setBusy(true);
+    setError("");
+    setMessage("");
+    try {
+      const result = await evidenceRequest<Record<string, unknown>>(
+        "/api/lifecycle" + path,
+        body,
+      );
+      callback?.(result);
+      await refresh();
+      setMessage(
+        "Recorded with append-only history. Demonstration only; no real submission, payment or legal signature.",
+      );
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function audit(id?: string) {
+    setError("");
+    try {
+      setHistory(
+        await evidenceRequest(
+          "/api/lifecycle/history" +
+            (id ? "?entity_id=" + encodeURIComponent(id) : ""),
+        ),
+      );
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+  async function inspectSnapshot(id: string) {
+    try {
+      const s = await evidenceRequest<Record<string, unknown>>(
+        "/api/lifecycle/snapshots/" + id,
+      );
+      const c = s.content as Record<string, unknown>;
+      setHistory({
+        id: s.id,
+        content_hash: s.content_hash,
+        validity: s.validity,
+        engine_summary: (c.engine_baseline as Record<string, unknown>).summary,
+        estimated_summary: c.estimated_summary,
+        approved_adjustments: c.approved_adjustments,
+        readiness: c.readiness,
+        evidence_reference_count: (c.evidence_refs as string[]).length,
+        dependencies: s.dependencies,
+      });
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+  async function openPackage(id: string) {
+    setError("");
+    try {
+      setDownload(
+        await evidenceRequest<Download>("/api/lifecycle/packages/" + id),
+      );
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+  async function compare(a: Item) {
+    try {
+      setHistory(
+        await evidenceRequest(
+          "/api/lifecycle/snapshots/" +
+            a.data.parent_snapshot_id +
+            "/compare/" +
+            a.data.snapshot_id,
+        ),
+      );
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+  function saveDownload() {
+    if (!download) return;
+    const url = URL.createObjectURL(
+      new Blob([download.download_json], { type: "application/json" }),
+    );
+    const a = document.createElement("a");
+    a.href = url;
+    a.download =
+      "miraflores-simulated-" +
+      download.kind +
+      "-" +
+      download.id.split(":")[1] +
+      ".json";
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+  const action = (
+    item: Item,
+    path: string,
+    action: string,
+    extra: object = {},
+  ) =>
+    void act(path + "/" + item.id + "/actions", {
+      action,
+      expected_revision: item.revision,
+      note,
+      ...extra,
+    });
+  return (
+    <section
+      className="feature-workspace space-y-4"
+      data-testid="filing-lifecycle"
+    >
+      <header>
+        <h2 className="text-2xl font-semibold">
+          {section ?? "Filing & Post-Filing"}
+        </h2>
+        <p className="my-2 rounded bg-amber-100 p-3 font-semibold">
+          SIMULATION ONLY · no IRS or California transport · no payment transfer
+          · no authenticated client identity or legal e-file signature
+        </p>
+        <p data-testid="real-filing-status" className="font-bold text-red-800">
+          Real case: FILING BLOCKED. Demonstration acceptance never clears
+          actual readiness.
+        </p>
+      </header>
+      <nav className="segmented-tabs" hidden={!!section}>
+        {tabs.map((t) => (
+          <button
+            className={button + (tab === t ? " bg-indigo-100" : "")}
+            key={t}
+            onClick={() => {
+              setTab(t);
+              setHistory(null);
+              setDownload(null);
+            }}
+          >
+            {t}
+          </button>
+        ))}
+      </nav>
+      {error && (
+        <p role="alert" className="rounded bg-red-100 p-3">
+          {error}
+        </p>
+      )}
+      {message && (
+        <p role="status" className="rounded bg-green-100 p-3">
+          {message}
+        </p>
+      )}
+      {!data && <p>Loading authorized lifecycle records…</p>}
+      {data && (
+        <>
+          <div className="lifecycle-context form-grid">
+            <label>
+              Working snapshot{" "}
+              <select
+                aria-label="Working snapshot"
+                className={control}
+                value={snapshotId}
+                onChange={(e) => setSnapshotId(e.target.value)}
+              >
+                <option value="">Select a frozen snapshot</option>
+                {data.snapshots.map((s) => (
+                  <option value={s.id} key={s.id}>
+                    {s.display_name.slice(0, 60)} · {s.version} · {s.purpose} ·{" "}
+                    {s.validity} · {s.id.slice(-8)}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Supporting references{" "}
+              <input
+                aria-label="Lifecycle evidence references"
+                className={control}
+                value={references}
+                onChange={(e) => setReferences(e.target.value)}
+                placeholder="D14, doc:D15#page1"
+              />
+            </label>
+            <label className="md:col-span-2">
+              Rationale / response / planning note
+              <textarea
+                aria-label="Lifecycle rationale"
+                className={control + " w-full"}
+                value={note}
+                onChange={(e) => setNote(e.target.value)}
+              />
+            </label>
+          </div>
+          {tab === "Finalization" && (
+            <section className="lifecycle-panel space-y-3">
+              <h3 className="text-lg font-semibold">
+                Immutable finalization snapshots
+              </h3>
+              <p>
+                Original engine values and approved estimated adjustments remain
+                separate. Demonstration snapshots retain every readiness
+                blocker; they are not filing-ready returns.
+              </p>
+              <label>
+                Snapshot baseline{" "}
+                <select
+                  aria-label="Snapshot baseline"
+                  className={control}
+                  value={version}
+                  onChange={(e) => setVersion(e.target.value)}
+                >
+                  {["v1", "v2", "v3"].map((v) => (
+                    <option key={v}>{v}</option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Finalization mode{" "}
+                <select
+                  aria-label="Finalization mode"
+                  className={control}
+                  value={mode}
+                  onChange={(e) => setMode(e.target.value)}
+                >
+                  <option value="demonstration">
+                    Demonstration-only freeze
+                  </option>
+                  <option value="authoritative">
+                    Authoritative (blocked without actual prerequisites)
+                  </option>
+                </select>
+              </label>
+              <label>
+                Supersede unfiled snapshot{" "}
+                <select
+                  aria-label="Supersede snapshot"
+                  className={control}
+                  value={supersedes}
+                  onChange={(e) => setSupersedes(e.target.value)}
+                >
+                  <option value="">Keep previous snapshots</option>
+                  {data.snapshots.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.id} · {s.validity}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <button
+                className={button}
+                disabled={busy || !hasNote || !refs.length}
+                onClick={() =>
+                  void act(
+                    "/snapshots",
+                    {
+                      version,
+                      mode,
+                      note,
+                      refs,
+                      supersedes_id: supersedes || null,
+                    },
+                    (r) => setSnapshotId(String(r.id)),
+                  )
+                }
+              >
+                Freeze snapshot
+              </button>
+              {data.snapshots.map((s) => (
+                <article
+                  key={s.id}
+                  className="workflow-card"
+                  data-testid="frozen-snapshot"
+                >
+                  <strong>{s.display_name}</strong>
+                  <p className="break-all text-xs">{s.id}</p> · {s.mode} ·{" "}
+                  {s.purpose} · <span>{s.validity}</span>
+                  <p className="break-all text-xs">
+                    Content SHA-256: {s.content_hash}
+                  </p>
+                  <p>{s.created_at}</p>
+                  <button
+                    className={button}
+                    onClick={() => void inspectSnapshot(s.id)}
+                  >
+                    Inspect {s.id}
+                  </button>
+                  <button className={button} onClick={() => void audit(s.id)}>
+                    Freeze history
+                  </button>
+                </article>
+              ))}
+            </section>
+          )}
+          {tab === "Extensions & Payments" && (
+            <section className="lifecycle-panel space-y-3">
+              <h3 className="text-lg font-semibold">
+                Extensions and evidence-backed payments
+              </h3>
+              <p>
+                Only the supplied April v2 estimate is supported: federal 35,728
+                balance rounded up to 36,000; California overpayment requires 0.
+                No funds are moved.
+              </p>
+              <label>
+                Extension jurisdiction{" "}
+                <select
+                  aria-label="Extension jurisdiction"
+                  className={control}
+                  value={jurisdiction}
+                  onChange={(e) => setJurisdiction(e.target.value)}
+                >
+                  <option value="federal">Federal</option>
+                  <option value="california">California</option>
+                </select>
+              </label>
+              <button
+                className={button}
+                disabled={busy || !hasNote}
+                onClick={() =>
+                  void act("/extensions", { version: "v2", jurisdiction, note })
+                }
+              >
+                Prepare packet extension estimate
+              </button>
+              {rows("lc_extension").map((e) => (
+                <article className="workflow-card" key={e.id}>
+                  <strong>{text(e.data.jurisdiction)} extension</strong> ·{" "}
+                  {e.state} · proposed {text(e.data.proposed_payment)}
+                  <Json value={e.data.estimate} />
+                  {partner &&
+                    ["prepared", "needs_review"].includes(e.state) && (
+                      <button
+                        className={button}
+                        disabled={busy || !hasNote}
+                        onClick={() => action(e, "/extensions", "approve")}
+                      >
+                        Approve extension {e.id}
+                      </button>
+                    )}
+                  {e.state === "approved" && (
+                    <button
+                      className={button}
+                      disabled={busy || !hasNote}
+                      onClick={() =>
+                        action(e, "/extensions", "simulate_submit")
+                      }
+                    >
+                      Simulate extension submission {e.id}
+                    </button>
+                  )}
+                  {reviewer && e.state === "simulated_submitted" && (
+                    <button
+                      className={button}
+                      disabled={busy || !hasNote}
+                      onClick={() =>
+                        action(e, "/extensions", "record_packet_event", {
+                          refs: ["timeline:extension-2026-04-14"],
+                        })
+                      }
+                    >
+                      Link scripted extension evidence {e.id}
+                    </button>
+                  )}
+                  <button className={button} onClick={() => void audit(e.id)}>
+                    Extension history
+                  </button>
+                </article>
+              ))}
+              <p>{data.external_confirmation_support}</p>
+              <label>
+                Payment source{" "}
+                <select
+                  aria-label="Payment source"
+                  className={control + " w-full"}
+                  value={paymentRef}
+                  onChange={(e) => setPaymentRef(e.target.value)}
+                >
+                  {data.payment_catalog.map((p) => (
+                    <option key={p.source_ref} value={p.source_ref}>
+                      {p.jurisdiction} {p.tax_year} · {p.date} · {p.amount} ·{" "}
+                      {p.classification} · {p.source_ref}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <button
+                className={button}
+                disabled={busy || !hasNote}
+                onClick={() =>
+                  void act("/payments", { source_ref: paymentRef, note })
+                }
+              >
+                Record payment evidence
+              </button>
+              {rows("lc_payment").map((p) => (
+                <article className="workflow-card" key={p.id}>
+                  {text(p.data.jurisdiction)} · designated{" "}
+                  {text(p.data.tax_year)} · {text(p.data.amount)} · {p.state} ·{" "}
+                  {text(p.data.classification)}
+                  {reviewer && p.state === "evidence_recorded" && (
+                    <button
+                      className={button}
+                      disabled={busy || !hasNote}
+                      onClick={() =>
+                        void act("/payments/" + p.id + "/review", {
+                          expected_revision: p.revision,
+                          note,
+                        })
+                      }
+                    >
+                      Review payment {p.id}
+                    </button>
+                  )}
+                  <button className={button} onClick={() => void audit(p.id)}>
+                    Payment history
+                  </button>
+                </article>
+              ))}
+              <details>
+                <summary>Independent payment reconciliation</summary>
+                <Json value={data.payment_reconciliations} />
+              </details>
+            </section>
+          )}
+          {tab === "Client Authorization" && (
+            <section className="lifecycle-panel space-y-3">
+              <h3 className="text-lg font-semibold">
+                Snapshot-bound client review
+              </h3>
+              <p>
+                Staff-mediated client-facing demonstration panel. Selecting a
+                packet client is not client authentication. Responses are never
+                legally valid e-file signatures.
+              </p>
+              <label>
+                Authorization expiry UTC{" "}
+                <input
+                  type="datetime-local"
+                  step="1"
+                  aria-label="Authorization expiry UTC"
+                  className={control}
+                  value={expires}
+                  onChange={(e) => setExpires(e.target.value)}
+                />
+              </label>
+              <button
+                className={button}
+                disabled={busy || !snapshotId || !hasNote}
+                onClick={() =>
+                  void act("/authorizations", {
+                    snapshot_id: snapshotId,
+                    expires_at: expires + "Z",
+                    note,
+                  })
+                }
+              >
+                Create demo client review request
+              </button>
+              <label>
+                Demonstration client{" "}
+                <select
+                  aria-label="Demonstration client"
+                  className={control}
+                  value={clientId}
+                  onChange={(e) => setClientId(e.target.value)}
+                >
+                  {data.clients.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.id} · {c.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              {rows("lc_authorization").map((a) => (
+                <article
+                  className="workflow-card"
+                  key={a.id}
+                  data-testid="client-authorization"
+                >
+                  <strong>{a.id}</strong> · {a.state}
+                  <p className="break-all text-xs">
+                    Bound snapshot: {text(a.data.snapshot_id)} ·{" "}
+                    {text(a.data.content_hash)}
+                  </p>
+                  <p>
+                    Expires {text(a.data.expires_at)} · client identity:
+                    declared demo only
+                  </p>
+                  <button
+                    className={button}
+                    onClick={() =>
+                      void evidenceRequest(
+                        "/api/lifecycle/authorizations/" +
+                          a.id +
+                          "/client-review",
+                      )
+                        .then(setHistory)
+                        .catch((e) => setError(String(e)))
+                    }
+                  >
+                    Open client-facing demo review
+                  </button>
+                  {["requested", "partially_approved"].includes(a.state) &&
+                    ["approve", "decline"].map((decision) => (
+                      <button
+                        className={button}
+                        key={decision}
+                        disabled={busy || !hasNote || !refs.length}
+                        onClick={() =>
+                          void act("/authorizations/" + a.id + "/responses", {
+                            client_id: clientId,
+                            decision,
+                            refs,
+                            note,
+                            expected_revision: a.revision,
+                          })
+                        }
+                      >
+                        {decision === "approve"
+                          ? "Record demo client approval"
+                          : "Record demo client decline"}{" "}
+                        {a.id}
+                      </button>
+                    ))}
+                  <details>
+                    <summary>Recorded demo responses</summary>
+                    <Json value={a.data.responses} />
+                  </details>
+                  <button className={button} onClick={() => void audit(a.id)}>
+                    Authorization history
+                  </button>
+                </article>
+              ))}
+            </section>
+          )}
+          {tab === "Filing Status" && (
+            <section className="lifecycle-panel space-y-3">
+              <h3 className="text-lg font-semibold">
+                Simulated filing state machine
+              </h3>
+              <p>
+                Draft → ready for simulated submission → submitted → rejected /
+                accepted. Each attempt binds an immutable content hash and
+                authorization. Real case readiness is separate. Separate
+                original snapshots start separate demonstration runs; they are
+                never additional real returns.
+              </p>
+              <label>
+                Filing jurisdiction{" "}
+                <select
+                  aria-label="Filing jurisdiction"
+                  className={control}
+                  value={jurisdiction}
+                  onChange={(e) => setJurisdiction(e.target.value)}
+                >
+                  <option value="federal">Federal</option>
+                  <option value="california">California</option>
+                </select>
+              </label>
+              <label>
+                Approved amendment (if applicable){" "}
+                <select
+                  aria-label="Filing amendment"
+                  className={control}
+                  value={amendmentId}
+                  onChange={(e) => setAmendmentId(e.target.value)}
+                >
+                  <option value="">Original filing</option>
+                  {rows("lc_amendment").map((a) => (
+                    <option key={a.id} value={a.id}>
+                      {a.id} · {a.state}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <button
+                className={button}
+                disabled={busy || !snapshotId || !hasNote}
+                onClick={() =>
+                  void act("/filings", {
+                    snapshot_id: snapshotId,
+                    jurisdiction,
+                    amendment_id: amendmentId || null,
+                    note,
+                  })
+                }
+              >
+                Create simulated filing draft
+              </button>
+              {rows("lc_filing").map((f) => (
+                <article
+                  className="space-y-2 rounded border p-3"
+                  key={f.id}
+                  data-testid="filing-record"
+                >
+                  <strong>
+                    {text(f.data.jurisdiction)} · {f.state} · SIMULATED
+                  </strong>
+                  <p className="break-all text-xs">
+                    {f.id} · snapshot {text(f.data.snapshot_id)} · current
+                    snapshot validity{" "}
+                    {
+                      data.snapshots.find((s) => s.id === f.data.snapshot_id)
+                        ?.validity
+                    }
+                  </p>
+                  <StateMachine
+                    states={[
+                      "draft",
+                      "ready_for_submission",
+                      "submitted",
+                      ...(f.state === "rejected" ? ["rejected"] : ["accepted"]),
+                    ]}
+                    current={f.state}
+                    label="Simulated filing progress"
+                  />
+                  <div className="flex flex-wrap gap-2">
+                    {partner && f.state === "draft" && (
+                      <button
+                        className={button}
+                        disabled={busy || !hasNote}
+                        onClick={() => action(f, "/filings", "ready")}
+                      >
+                        Approve simulated readiness {f.id}
+                      </button>
+                    )}
+                    {f.state === "ready_for_submission" && (
+                      <button
+                        className={button}
+                        disabled={busy || !hasNote}
+                        onClick={() => action(f, "/filings", "submit")}
+                      >
+                        Simulate filing submission {f.id}
+                      </button>
+                    )}
+                    {reviewer && f.state === "submitted" && (
+                      <>
+                        {["simulate_reject", "simulate_accept"].map(
+                          (actionName) => (
+                            <button
+                              className={button}
+                              key={actionName}
+                              disabled={busy || !hasNote}
+                              onClick={() => action(f, "/filings", actionName)}
+                            >
+                              {actionName === "simulate_reject"
+                                ? "Simulate rejection"
+                                : "Simulate acceptance"}{" "}
+                              {f.id}
+                            </button>
+                          ),
+                        )}
+                      </>
+                    )}
+                    {f.state === "rejected" && (
+                      <button
+                        className={button}
+                        disabled={
+                          busy || !hasNote || !snapshotId || !refs.length
+                        }
+                        onClick={() =>
+                          action(f, "/filings", "correct", {
+                            replacement_snapshot_id: snapshotId,
+                            replacement_amendment_id: amendmentId || null,
+                            refs,
+                          })
+                        }
+                      >
+                        Bind corrected snapshot {f.id}
+                      </button>
+                    )}
+                    {f.state === "accepted" && (
+                      <button
+                        className={button}
+                        disabled={busy}
+                        onClick={() =>
+                          void act(
+                            "/filings/" + f.id + "/client-copy",
+                            {},
+                            (r) => void openPackage(String(r.id)),
+                          )
+                        }
+                      >
+                        Generate simulated client copy {f.id}
+                      </button>
+                    )}
+                    <button className={button} onClick={() => void audit(f.id)}>
+                      Filing history
+                    </button>
+                  </div>
+                  <details>
+                    <summary>Attempts and correction history</summary>
+                    <Json
+                      value={{
+                        attempts: f.data.attempts,
+                        corrections: f.data.corrections,
+                      }}
+                    />
+                  </details>
+                </article>
+              ))}
+              <h4 className="font-semibold">Client-copy delivery records</h4>
+              {data.packages
+                .filter((p) => p.kind === "client_copy")
+                .map((p) => (
+                  <div className="rounded border p-2" key={p.id}>
+                    {p.id}
+                    <button
+                      className={button}
+                      onClick={() => void openPackage(p.id)}
+                    >
+                      Open client-copy package
+                    </button>
+                    <label>
+                      Recipient{" "}
+                      <select
+                        aria-label={"Recipient " + p.id}
+                        className={control}
+                        value={clientId}
+                        onChange={(e) => setClientId(e.target.value)}
+                      >
+                        {data.clients.map((c) => (
+                          <option key={c.id} value={c.id}>
+                            {c.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <button
+                      className={button}
+                      disabled={busy || !hasNote}
+                      onClick={() =>
+                        void act("/deliveries", {
+                          package_id: p.id,
+                          client_id: clientId,
+                          note,
+                        })
+                      }
+                    >
+                      Record simulated delivery {p.id}
+                    </button>
+                  </div>
+                ))}
+              {rows("lc_delivery").map((d) => (
+                <p key={d.id}>
+                  {text(d.data.client_id)} · {d.state} · no actual delivery
+                  confirmation
+                </p>
+              ))}
+            </section>
+          )}
+          {tab === "Amendments" && (
+            <section className="lifecycle-panel space-y-3">
+              <h3 className="text-lg font-semibold">
+                Amend on top of an accepted original
+              </h3>
+              <p>
+                Select an accepted original snapshot above. Approved adjustments
+                are captured separately in a new amended snapshot. Historical
+                originals and their copies remain immutable.
+              </p>
+              <label>
+                Amended engine baseline{" "}
+                <select
+                  aria-label="Amended baseline"
+                  className={control}
+                  value={version}
+                  onChange={(e) => setVersion(e.target.value)}
+                >
+                  {["v1", "v2", "v3"].map((v) => (
+                    <option key={v}>{v}</option>
+                  ))}
+                </select>
+              </label>
+              <button
+                className={button}
+                disabled={busy || !snapshotId || !hasNote || !refs.length}
+                onClick={() =>
+                  void act("/amendments", {
+                    parent_snapshot_id: snapshotId,
+                    version,
+                    note,
+                    refs,
+                  })
+                }
+              >
+                Prepare separate amendment
+              </button>
+              {rows("lc_amendment").map((a) => (
+                <article
+                  className="workflow-card"
+                  key={a.id}
+                  data-testid="amendment-record"
+                >
+                  <strong>
+                    {a.id} · {a.state}
+                  </strong>
+                  <p>
+                    Original {text(a.data.parent_snapshot_id)} → amended{" "}
+                    {text(a.data.snapshot_id)}
+                  </p>
+                  <button className={button} onClick={() => void compare(a)}>
+                    Compare original and amended workpaper
+                  </button>
+                  <button
+                    className={button}
+                    onClick={() => {
+                      setSnapshotId(String(a.data.snapshot_id));
+                      setAmendmentId(a.id);
+                      setTab("Client Authorization");
+                    }}
+                  >
+                    Authorize amended snapshot
+                  </button>
+                  {reviewer &&
+                    ["prepared", "needs_review"].includes(a.state) && (
+                      <button
+                        className={button}
+                        disabled={busy || !hasNote}
+                        onClick={() => action(a, "/amendments", "review")}
+                      >
+                        Independently review amendment {a.id}
+                      </button>
+                    )}
+                  {partner && a.state === "reviewed" && (
+                    <button
+                      className={button}
+                      disabled={busy || !hasNote}
+                      onClick={() => action(a, "/amendments", "approve")}
+                    >
+                      Partner approve amendment {a.id}
+                    </button>
+                  )}
+                  <button className={button} onClick={() => void audit(a.id)}>
+                    Amendment history
+                  </button>
+                </article>
+              ))}
+            </section>
+          )}
+          {tab === "Notices & Examination" && (
+            <section className="lifecycle-panel space-y-3">
+              <h3 className="text-lg font-semibold">
+                Notice intake and examination response
+              </h3>
+              <p>
+                The supplied 2028 Letter 566 is scripted case history, not a
+                real received notice. Deadlines come from the packet or an
+                explicitly labeled staff-entered demonstration record.
+              </p>
+              <label>
+                <input
+                  type="checkbox"
+                  aria-label="Manual demonstration notice"
+                  checked={manualNotice}
+                  onChange={(e) => setManualNotice(e.target.checked)}
+                />{" "}
+                Staff-entered demonstration notice (including California)
+              </label>
+              {manualNotice ? (
+                <div className="flex flex-wrap gap-2">
+                  <select
+                    aria-label="Notice jurisdiction"
+                    className={control}
+                    value={jurisdiction}
+                    onChange={(e) => setJurisdiction(e.target.value)}
+                  >
+                    <option value="federal">Federal</option>
+                    <option value="california">California</option>
+                  </select>
+                  <input
+                    aria-label="Notice title"
+                    className={control}
+                    value={noticeTitle}
+                    onChange={(e) => setNoticeTitle(e.target.value)}
+                  />
+                  <input
+                    type="date"
+                    aria-label="Notice source date"
+                    className={control}
+                    value={noticeDate}
+                    onChange={(e) => setNoticeDate(e.target.value)}
+                  />
+                  <input
+                    type="date"
+                    aria-label="Notice response deadline"
+                    className={control}
+                    value={deadline}
+                    onChange={(e) => setDeadline(e.target.value)}
+                  />
+                </div>
+              ) : (
+                <label>
+                  Packet notice{" "}
+                  <select
+                    aria-label="Packet notice"
+                    className={control}
+                    value={noticeId}
+                    onChange={(e) => setNoticeId(e.target.value)}
+                  >
+                    {data.packet_notices.map((n) => (
+                      <option value={n.id} key={n.id}>
+                        {n.id} · {n.type} · {n.tax_year} · deadline{" "}
+                        {n.response_due ?? "not supplied"}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+              <label>
+                Response / handoff owner{" "}
+                <select
+                  aria-label="Response owner"
+                  className={control}
+                  value={owner}
+                  onChange={(e) => setOwner(e.target.value)}
+                >
+                  {data.staff.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.id} {s.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <button
+                className={button}
+                disabled={busy || !hasNote}
+                onClick={() =>
+                  void act("/notices", {
+                    packet_notice_id: manualNotice ? null : noticeId,
+                    jurisdiction,
+                    title: noticeTitle,
+                    source_date: manualNotice ? noticeDate : null,
+                    response_due: manualNotice ? deadline || null : null,
+                    refs,
+                    owner_id: owner,
+                    note,
+                  })
+                }
+              >
+                Record demonstration notice intake
+              </button>
+              {rows("lc_notice").map((n) => (
+                <article
+                  className="space-y-2 rounded border p-3"
+                  key={n.id}
+                  data-testid="notice-record"
+                >
+                  <strong>
+                    {text(n.data.title)} · {text(n.data.jurisdiction)} ·{" "}
+                    {n.state}
+                  </strong>
+                  <p className="break-all text-xs">{n.id}</p>
+                  <p>
+                    Classification: {text(n.data.classification)} · owner{" "}
+                    {text(n.data.owner_id)} · response due{" "}
+                    {text(n.data.response_due)}
+                  </p>
+                  <p>
+                    Real received timestamp: {text(n.data.real_received_at)}
+                  </p>
+                  {["intake", "preparing", "needs_review"].includes(
+                    n.state,
+                  ) && (
+                    <button
+                      className={button}
+                      disabled={busy || !snapshotId || !hasNote || !refs.length}
+                      onClick={() =>
+                        action(n, "/notices", "prepare", {
+                          snapshot_id: snapshotId,
+                          refs,
+                        })
+                      }
+                    >
+                      Prepare response {n.id}
+                    </button>
+                  )}
+                  {n.state === "preparing" && (
+                    <button
+                      className={button}
+                      disabled={busy || !hasNote}
+                      onClick={() => action(n, "/notices", "submit_review")}
+                    >
+                      Submit response for review {n.id}
+                    </button>
+                  )}
+                  {reviewer && n.state === "in_review" && (
+                    <button
+                      className={button}
+                      disabled={busy || !hasNote}
+                      onClick={() => action(n, "/notices", "approve")}
+                    >
+                      Approve response {n.id}
+                    </button>
+                  )}
+                  {n.state === "approved" && (
+                    <>
+                      <button
+                        className={button}
+                        disabled={busy}
+                        onClick={() =>
+                          void act(
+                            "/notices/" + n.id + "/package",
+                            {},
+                            (r) => void openPackage(String(r.id)),
+                          )
+                        }
+                      >
+                        Generate examination package {n.id}
+                      </button>
+                      <button
+                        className={button}
+                        disabled={busy || !hasNote}
+                        onClick={() =>
+                          action(n, "/notices", "simulate_dispatch")
+                        }
+                      >
+                        Simulate response dispatch {n.id}
+                      </button>
+                    </>
+                  )}
+                  {reviewer && n.state === "simulated_sent" && (
+                    <button
+                      className={button}
+                      disabled={busy || !hasNote}
+                      onClick={() => action(n, "/notices", "close_demo")}
+                    >
+                      Close demonstration notice {n.id}
+                    </button>
+                  )}
+                  <button className={button} onClick={() => void audit(n.id)}>
+                    Notice audit and retention
+                  </button>
+                </article>
+              ))}
+            </section>
+          )}
+          {tab === "Carryovers & Planning" && (
+            <section className="lifecycle-panel space-y-3">
+              <h3 className="text-lg font-semibold">
+                Carryover provenance and next-year handoff
+              </h3>
+              <p>
+                Original engine values, manual proposals and reviewed values
+                remain distinct. Review is a workpaper attestation; no
+                authoritative corrected rollforward or 2026 tax is computed.
+              </p>
+              <button
+                className={button}
+                disabled={busy || !snapshotId || !hasNote}
+                onClick={() =>
+                  void act("/carryovers/import", {
+                    snapshot_id: snapshotId,
+                    note,
+                  })
+                }
+              >
+                Import supplied carryovers as drafts
+              </button>
+              <label>
+                Manual adjusted workpaper value (optional){" "}
+                <input
+                  aria-label="Adjusted carryover value"
+                  className={control}
+                  value={adjusted}
+                  onChange={(e) => setAdjusted(e.target.value)}
+                />
+              </label>
+              <label>
+                Calculation method / authority{" "}
+                <input
+                  aria-label="Carryover authority"
+                  className={control}
+                  value={authority}
+                  onChange={(e) => setAuthority(e.target.value)}
+                />
+              </label>
+              {rows("lc_carryover").map((c) => (
+                <article className="rounded border p-3 text-sm" key={c.id}>
+                  <strong>
+                    {text(c.data.key)} · {c.state}
+                  </strong>
+                  <p>
+                    Original {text(c.data.original_value)} · manual{" "}
+                    {text(c.data.adjusted_value)} · reviewed{" "}
+                    {text(c.data.reviewed_value)}
+                  </p>
+                  <p className="text-xs">
+                    Source {text(c.data.source_path)} ·{" "}
+                    {text(c.data.calculation_status)}
+                  </p>
+                  <button
+                    className={button}
+                    disabled={
+                      busy || !hasNote || !authority.trim() || !refs.length
+                    }
+                    onClick={() =>
+                      action(c, "/carryovers", "revise", {
+                        adjusted_value: adjusted || null,
+                        refs,
+                        authority,
+                      })
+                    }
+                  >
+                    Propose manual carryover {c.id}
+                  </button>
+                  {reviewer && c.state === "prepared" && (
+                    <button
+                      className={button}
+                      disabled={
+                        busy || !hasNote || !authority.trim() || !refs.length
+                      }
+                      onClick={() =>
+                        action(c, "/carryovers", "review", { refs, authority })
+                      }
+                    >
+                      Review carryover {c.id}
+                    </button>
+                  )}
+                  <button className={button} onClick={() => void audit(c.id)}>
+                    Carryover history
+                  </button>
+                </article>
+              ))}
+              <h4 className="font-semibold">
+                2026 planning facts and dates from the packet
+              </h4>
+              <Json value={data.planning_reference} />
+              <p>
+                No future-year tax amounts or actual installment dollar amounts
+                are generated.
+              </p>
+              <label>
+                Handoff owner{" "}
+                <select
+                  aria-label="Handoff owner"
+                  className={control}
+                  value={owner}
+                  onChange={(e) => setOwner(e.target.value)}
+                >
+                  {data.staff.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.id} {s.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <button
+                className={button}
+                disabled={busy || !snapshotId || !hasNote}
+                onClick={() =>
+                  void act("/handoffs", {
+                    snapshot_id: snapshotId,
+                    owner_id: owner,
+                    note,
+                  })
+                }
+              >
+                Prepare next-year handoff
+              </button>
+              {rows("lc_handoff").map((h) => (
+                <article className="workflow-card" key={h.id}>
+                  {h.id} · {h.state} · proposed owner {text(h.data.owner_id)}
+                  {h.data.needs_successor_handoff === true && (
+                    <p className="text-amber-800">
+                      Published history is preserved; changed carryovers require
+                      a fresh handoff and independent review.
+                    </p>
+                  )}
+                  {reviewer &&
+                    ["prepared", "needs_review"].includes(h.state) && (
+                      <button
+                        className={button}
+                        disabled={busy || !hasNote}
+                        onClick={() => action(h, "/handoffs", "review")}
+                      >
+                        Review next-year handoff {h.id}
+                      </button>
+                    )}
+                  {h.state === "reviewed" && (
+                    <button
+                      className={button}
+                      disabled={busy || !hasNote}
+                      onClick={() => action(h, "/handoffs", "handoff")}
+                    >
+                      Record simulated handoff {h.id}
+                    </button>
+                  )}
+                  <button className={button} onClick={() => void audit(h.id)}>
+                    Handoff history
+                  </button>
+                </article>
+              ))}
+            </section>
+          )}
+          <details>
+            <summary>All generated immutable packages</summary>
+            {data.packages.map((p) => (
+              <p className="my-2" key={p.id}>
+                {p.kind} · {p.id}
+                <button
+                  className={button}
+                  onClick={() => void openPackage(p.id)}
+                >
+                  Open {p.id}
+                </button>
+              </p>
+            ))}
+          </details>
+          <button className={button} onClick={() => void audit()}>
+            View lifecycle audit history
+          </button>
+        </>
+      )}
+      {download && (
+        <section
+          className="space-y-2 rounded border p-3"
+          data-testid="lifecycle-package"
+        >
+          <h3 className="font-semibold">
+            Generated {download.kind} · SIMULATED
+          </h3>
+          <p className="break-all text-xs">
+            Canonical stored content: {download.canonical_content_hash}
+          </p>
+          <p className="break-all text-xs">
+            Delivered content (current masking):{" "}
+            {download.delivered_content_hash}
+          </p>
+          <p>
+            Self-contained JSON package. Sensitive access uses the current
+            session clearance and audited reveal controls.
+          </p>
+          <button className={button} onClick={saveDownload}>
+            Download simulated JSON package
+          </button>
+          <details>
+            <summary>Inspect package contents</summary>
+            <Json value={download.content} />
+          </details>
+          <button className={button} onClick={() => setDownload(null)}>
+            Close package
+          </button>
+        </section>
+      )}
+      {history !== null && (
+        <section>
+          <h3 className="font-semibold">Lifecycle evidence / audit detail</h3>
+          <div data-testid="lifecycle-history">
+            <Json value={history} />
+          </div>
+          <button className={button} onClick={() => setHistory(null)}>
+            Close detail
+          </button>
+        </section>
+      )}
+    </section>
+  );
+}
