@@ -1,17 +1,25 @@
 
 "use client";
 
+import FirmWorkflow from "@/components/FirmWorkflow";
+import { apiFetch } from "@/components/session";
+
 import { useEffect, useMemo, useRef, useState } from "react";
 import ReviewWorkspace, {
   type ReviewFinding,
 } from "@/components/ReviewWorkspace";
 import SourceVerification from "@/components/SourceVerification";
+import ReconciliationDashboard from "@/components/ReconciliationDashboard";
+import DocumentAccountability from "@/components/DocumentAccountability";
+import DocumentInspector from "@/components/DocumentInspector";
+import EvidenceResolver from "@/components/EvidenceResolver";
+import AdjustmentWorkspace from "@/components/AdjustmentWorkspace";
+import type { SourceDocument, ReturnLine, Lineage, Overview } from "@/components/workpaper-types";
 
 const API =
   process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
-type RecordData = Record<string, any>;
-type Tab = "return" | "documents" | "review";
+type Tab = "return" | "documents" | "review" | "adjustments" | "accountability" | "resolver" | "reconciliation";
 
 function money(value: unknown): string {
   if (typeof value !== "number") {
@@ -33,8 +41,8 @@ async function checkResponse(response: Response) {
 
 function findMatchingLine(
   finding: ReviewFinding,
-  lines: RecordData[]
-): RecordData | null {
+  lines: ReturnLine[]
+): ReturnLine | null {
   const references = Array.isArray(finding.refs)
     ? finding.refs.filter(
       (ref): ref is string => typeof ref === "string"
@@ -77,26 +85,29 @@ function findMatchingLine(
   return null;
 }
 
-export default function Home() {
+function Home() {
   const [tab, setTab] = useState<Tab>("return");
   const [overview, setOverview] =
-    useState<RecordData | null>(null);
-  const [lines, setLines] = useState<RecordData[]>([]);
-  const [documents, setDocuments] = useState<RecordData[]>([]);
+    useState<Overview | null>(null);
+  const [lines, setLines] = useState<ReturnLine[]>([]);
+  const [documents, setDocuments] = useState<SourceDocument[]>([]);
   const [validation, setValidation] =
-    useState<RecordData | null>(null);
+    useState<{ total: number } | null>(null);
 
   const [version, setVersion] = useState("v3");
   const [search, setSearch] = useState("");
 
   const [selectedLine, setSelectedLine] =
-    useState<RecordData | null>(null);
+    useState<ReturnLine | null>(null);
   const [selectedDocument, setSelectedDocument] =
-    useState<RecordData | null>(null);
+    useState<SourceDocument | null>(null);
   const [lineage, setLineage] =
-    useState<RecordData | null>(null);
+    useState<Lineage | null>(null);
   const [selectedEvidenceId, setSelectedEvidenceId] =
     useState<string | null>(null);
+
+  const [adjustmentToOpen, setAdjustmentToOpen] = useState<string | null>(null);
+  const [selectedReference, setSelectedReference] = useState<string | null>(null);
 
   const [loading, setLoading] = useState(true);
   const [inspectorLoading, setInspectorLoading] =
@@ -110,8 +121,8 @@ export default function Home() {
     let active = true;
 
     Promise.all([
-      fetch(`${API}/api/overview`).then(checkResponse),
-      fetch(`${API}/api/documents`).then(checkResponse),
+      apiFetch(`${API}/api/overview`).then(checkResponse),
+      apiFetch(`${API}/api/documents`).then(checkResponse),
     ])
       .then(([overviewData, documentData]) => {
         if (!active) return;
@@ -140,23 +151,13 @@ export default function Home() {
   useEffect(() => {
     let active = true;
 
-    selectionRequest.current += 1;
-    setLoading(true);
-    setLines([]);
-    setSelectedLine(null);
-    setSelectedDocument(null);
-    setSelectedEvidenceId(null);
-    setLineage(null);
-    setInspectorMessage("");
-    setInspectorLoading(false);
-
     Promise.all([
-      fetch(
+      apiFetch(
         `${API}/api/return-lines?version=${encodeURIComponent(
           version
         )}`
       ).then(checkResponse),
-      fetch(
+      apiFetch(
         `${API}/api/validation?version=${encodeURIComponent(
           version
         )}`
@@ -187,19 +188,36 @@ export default function Home() {
     };
   }, [version]);
 
-  async function selectLine(line: RecordData) {
+  function changeVersion(nextVersion: string) {
+    if (nextVersion === version) return;
+    setAdjustmentToOpen(null);
+    selectionRequest.current += 1;
+    setLoading(true);
+    setLines([]);
+    setSelectedLine(null);
+    setSelectedDocument(null);
+    setSelectedEvidenceId(null);
+    setSelectedReference(null);
+    setLineage(null);
+    setInspectorMessage("");
+    setInspectorLoading(false);
+    setVersion(nextVersion);
+  }
+
+  async function selectLine(line: ReturnLine) {
     const requestId = ++selectionRequest.current;
 
     setSelectedLine(line);
     setSelectedDocument(null);
     setSelectedEvidenceId(null);
+    setSelectedReference(null);
     setLineage(null);
     setInspectorMessage("");
     setInspectorLoading(true);
     setError("");
 
     try {
-      const result = await fetch(
+      const result = await apiFetch(
         `${API}/api/lineage/${encodeURIComponent(
           line.key
         )}?version=${encodeURIComponent(version)}`
@@ -228,12 +246,13 @@ export default function Home() {
 
     setSelectedDocument(null);
     setSelectedEvidenceId(null);
+    setSelectedReference(null);
     setInspectorLoading(true);
     setInspectorMessage("");
     setError("");
 
     try {
-      const document = await fetch(
+      const document = await apiFetch(
         `${API}/api/documents/${encodeURIComponent(id)}`
       ).then(checkResponse);
 
@@ -263,10 +282,12 @@ export default function Home() {
       return;
     }
 
+    if (finding.refs?.length) { openReference(finding.refs[0]); return; }
     selectionRequest.current += 1;
     setSelectedLine(null);
     setSelectedDocument(null);
     setSelectedEvidenceId(null);
+    setSelectedReference(null);
     setLineage(null);
     setInspectorLoading(false);
     setInspectorMessage(
@@ -276,6 +297,7 @@ export default function Home() {
   }
 
   function openEvidence(evidenceId: string) {
+    setSelectedReference(null);
     selectionRequest.current += 1;
     setInspectorLoading(false);
     setSelectedDocument(null);
@@ -283,8 +305,18 @@ export default function Home() {
     setInspectorMessage("");
   }
 
+  function openReference(ref: string) {
+    if (/^ev-\d+$/.test(ref)) { openEvidence(ref); return; }
+    if (/^D\d+$/.test(ref)) { void selectDocument(ref); return; }
+    if (lines.some(line => line.key === ref)) { void selectLine(lines.find(line => line.key === ref)!); return; }
+    selectionRequest.current += 1;
+    setSelectedEvidenceId(null); setSelectedDocument(null); setInspectorLoading(false); setInspectorMessage("");
+    setSelectedReference(ref);
+  }
+
   function closeEvidence() {
     setSelectedEvidenceId(null);
+    setSelectedReference(null);
   }
 
   const filteredLines = useMemo(() => {
@@ -336,7 +368,7 @@ export default function Home() {
               aria-label="Return version"
               value={version}
               onChange={(event) =>
-                setVersion(event.target.value)
+                changeVersion(event.target.value)
               }
               className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm"
             >
@@ -387,6 +419,10 @@ export default function Home() {
                 ["return", "Tax Return"],
                 ["documents", "Document Explorer"],
                 ["review", "Review Findings"],
+                ["adjustments", "Tax Adjustments"],
+                ["accountability", "Document Accountability"],
+                ["resolver", "Evidence Resolver"],
+                ["reconciliation", "Reconciliation Dashboard"],
               ] as const
             ).map(([key, label]) => (
               <button
@@ -424,7 +460,7 @@ export default function Home() {
                   ? "Tax Return Lines"
                   : tab === "documents"
                     ? "Source Documents"
-                    : "Independent Validation"}
+                    : tab === "adjustments" ? "Audited Tax Adjustments" : tab === "accountability" ? "Document Accountability" : tab === "resolver" ? "Unified Evidence Resolver" : tab === "reconciliation" ? "Reconciliation Dashboard" : "Independent Validation"}
               </h2>
 
               <p className="mt-1 text-sm text-slate-500">
@@ -432,10 +468,10 @@ export default function Home() {
                   ? "Select a line to inspect its calculation and evidence."
                   : tab === "documents"
                     ? "Open a document to inspect its simulated printed content."
-                    : "Review, resolve, and track tax workpaper findings."}
+                    : tab === "adjustments" ? "Prepare, independently approve, and audit estimated tax adjustments." : tab === "accountability" ? "Evidence-based dispositions across all source documents." : tab === "resolver" ? "Inspect every documented reference format and unresolved reason." : "Review, resolve, and track tax workpaper findings."}
               </p>
 
-              {tab !== "review" && (
+              {(tab === "return" || tab === "documents") && (
                 <input
                   value={search}
                   onChange={(event) =>
@@ -451,10 +487,19 @@ export default function Home() {
               )}
             </div>
 
-            {tab === "review" ? (
+            {tab === "reconciliation" ? (
+              <ReconciliationDashboard key={version} version={version} onNavigate={openReference} onOpenAdjustment={id => { setAdjustmentToOpen(id); setTab("adjustments"); }} />
+            ) : tab === "accountability" ? (
+              <DocumentAccountability key={version} version={version} onOpenDocument={selectDocument} onNavigate={openReference} />
+            ) : tab === "resolver" ? (
+              <EvidenceResolver key={version} version={version} onNavigate={openReference} />
+            ) : tab === "adjustments" ? (
+              <AdjustmentWorkspace key={version} version={version} onOpenDocument={selectDocument} onOpenEvidence={openEvidence} onOpenReference={openReference} initialAdjustmentId={adjustmentToOpen} />
+            ) : tab === "review" ? (
               <ReviewWorkspace
                 version={version}
                 onSelectFinding={selectFindingEvidence}
+                onOpenReference={openReference}
               />
             ) : loading ? (
               <p className="p-6 text-sm text-slate-500">
@@ -499,6 +544,7 @@ export default function Home() {
                 {filteredDocuments.map((doc) => (
                   <button
                     key={doc.id}
+                    aria-label={`${doc.id} ${doc.title}`}
                     onClick={() =>
                       void selectDocument(doc.id)
                     }
@@ -543,6 +589,8 @@ export default function Home() {
             <div className="max-h-[750px] overflow-auto p-5">
               {selectedEvidenceId ? (
                 <SourceVerification
+                  key={`${version}-${selectedEvidenceId}`}
+                  version={version}
                   evidenceId={selectedEvidenceId}
                   onClose={closeEvidence}
                   onOpenDocument={(id) =>
@@ -554,44 +602,15 @@ export default function Home() {
                   Loading supporting evidence...
                 </p>
               ) : selectedDocument ? (
-                <div>
-                  <button
-                    onClick={() =>
-                      setSelectedDocument(null)
-                    }
-                    className="mb-4 text-sm font-medium text-indigo-600"
-                  >
-                    ← Back to evidence
-                  </button>
-
-                  <p className="text-xs font-bold text-indigo-600">
-                    {selectedDocument.id}
-                  </p>
-                  <h3 className="mt-2 font-semibold">
-                    {selectedDocument.title}
-                  </h3>
-
-                  {(selectedDocument.pages ?? []).map(
-                    (page: RecordData) => (
-                      <div
-                        key={page.page}
-                        className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-4"
-                      >
-                        <p className="mb-3 text-xs font-semibold text-slate-400">
-                          PAGE {page.page}
-                        </p>
-                        <p className="whitespace-pre-wrap break-words text-sm leading-7 text-slate-700">
-                          {page.printed_content}
-                        </p>
-                      </div>
-                    )
-                  )}
-                </div>
+                <DocumentInspector key={`${version}-${selectedDocument.id}`} document={selectedDocument} version={version} onBack={() => setSelectedDocument(null)} onNavigate={openReference} />
+              ) : selectedReference ? (
+                <EvidenceResolver key={`${version}-${selectedReference}`} reference={selectedReference} version={version} onNavigate={openReference} />
               ) : lineage ? (
                 <LineageNode
                   node={lineage}
                   onOpenDocument={selectDocument}
                   onOpenEvidence={openEvidence}
+                  onOpenReference={openReference}
                 />
               ) : inspectorMessage ? (
                 <div className="rounded-xl border border-amber-200 bg-amber-50 p-4">
@@ -646,10 +665,12 @@ function LineageNode({
   node,
   onOpenDocument,
   onOpenEvidence,
+  onOpenReference,
 }: {
-  node: RecordData;
+  node: Lineage;
   onOpenDocument: (id: string) => void;
   onOpenEvidence: (id: string) => void;
+  onOpenReference: (ref: string) => void;
 }) {
   if (node.missing || node.cycle) {
     return (
@@ -683,7 +704,7 @@ function LineageNode({
       )}
 
       {(node.sources ?? []).map(
-        (source: RecordData, index: number) => {
+        (source, index: number) => {
           const ref = String(source.ref ?? "");
           const isEvidence = /^ev-\d+$/.test(ref);
 
@@ -701,9 +722,7 @@ function LineageNode({
                   {ref}
                 </button>
               ) : (
-                <p className="break-all font-mono text-xs text-slate-500">
-                  {ref}
-                </p>
+                <button className="break-all text-left font-mono text-xs text-indigo-700 underline" onClick={() => onOpenReference(ref)}>{ref}</button>
               )}
 
               {source.evidence && (
@@ -731,7 +750,7 @@ function LineageNode({
                 <button
                   type="button"
                   onClick={() =>
-                    onOpenDocument(source.document.id)
+                    source.document && onOpenDocument(source.document.id)
                   }
                   className="mt-3 text-left text-sm font-medium text-indigo-600 hover:underline"
                 >
@@ -742,7 +761,7 @@ function LineageNode({
 
               {source.type === "external_reference" && (
                 <p className="mt-1 text-xs text-amber-700">
-                  Reference resolution pending
+                  {source.resolution?.status === "resolved" ? `Resolved ${source.resolution.type}` : source.resolution?.reason ?? "Reference resolution unavailable"}
                 </p>
               )}
             </div>
@@ -755,13 +774,14 @@ function LineageNode({
           <p className="mb-3 text-xs font-semibold uppercase text-slate-400">
             Calculation inputs
           </p>
-          {node.inputs.map(
-            (input: RecordData, index: number) => (
+          {(node.inputs ?? []).map(
+            (input, index: number) => (
               <LineageNode
                 key={`${input.key}-${index}`}
                 node={input}
                 onOpenDocument={onOpenDocument}
                 onOpenEvidence={onOpenEvidence}
+                onOpenReference={onOpenReference}
               />
             )
           )}
@@ -770,3 +790,6 @@ function LineageNode({
     </div>
   );
 }
+
+
+export default function Page(){return <FirmWorkflow><Home /></FirmWorkflow>;}

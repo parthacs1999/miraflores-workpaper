@@ -39,3 +39,9 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Isolated production build for browser tests
+.next-e2e/
+playwright-report/
+
+.next-workflow-e2e/

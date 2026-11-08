@@ -4,7 +4,7 @@ import { test, expect } from "@playwright/test";
 test("CPA can inspect extracted evidence against printed source", async ({
     page,
 }) => {
-    await page.goto("http://localhost:3000");
+    await page.goto(process.env.E2E_BASE_URL ?? "http://localhost:3000");
 
     await page.getByLabel("Return version").selectOption("v3");
 

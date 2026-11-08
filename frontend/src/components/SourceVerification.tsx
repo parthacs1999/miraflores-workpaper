@@ -1,7 +1,11 @@
 
 "use client";
 
+import { apiFetch } from "@/components/session";
+
 import { useEffect, useState } from "react";
+import FieldVerification from "./FieldVerification";
+import type { MatchCandidate } from "./evidence-types";
 
 const API =
     process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
@@ -24,17 +28,16 @@ type VerificationResult = {
     position: Record<string, number> | null;
     status: VerificationStatus;
     reason: string;
-    match: {
-        method: string;
-        matched_text: string;
-        start: number;
-        end: number;
-    } | null;
+    match: MatchCandidate | null;
     printed_content: string | null;
+    assessment: string;
+    candidates: MatchCandidate[];
+    ambiguity_resolved_by_field?: boolean;
 };
 
 type Props = {
     evidenceId: string;
+    version?: string;
     onClose: () => void;
     onOpenDocument?: (documentId: string) => void;
 };
@@ -88,6 +91,7 @@ function HighlightedSource({
 
 export default function SourceVerification({
     evidenceId,
+    version = "v3",
     onClose,
     onOpenDocument,
 }: Props) {
@@ -105,7 +109,7 @@ export default function SourceVerification({
             setResult(null);
 
             try {
-                const response = await fetch(
+                const response = await apiFetch(
                     `${API}/api/source-verification/${encodeURIComponent(
                         evidenceId
                     )}`,
@@ -167,7 +171,7 @@ export default function SourceVerification({
             <div className="flex items-center justify-between gap-3">
                 <div>
                     <p className="text-xs font-semibold uppercase tracking-wider text-indigo-600">
-                        Source verification
+                        Automatic source matching
                     </p>
 
                     <h3 className="mt-1 font-mono text-sm font-semibold">
@@ -296,6 +300,10 @@ export default function SourceVerification({
                         </p>
                     </div>
 
+                    <p className="text-xs font-semibold" data-testid="automatic-field-assessment">Automatic assessment: {result.assessment}. Human confirmation is recorded separately.</p>
+                    {result.match && <p className="text-xs">Matched field: {result.match.field_anchor}; text offsets {result.match.start}–{result.match.end}; line {result.match.line}, column {result.match.column}.</p>}
+                    {result.candidates.length > 1 && <details><summary className="text-xs font-semibold">Matching source locations ({result.candidates.length})</summary>{result.candidates.map(candidate => <p key={candidate.start} className="mt-2 text-xs">Offsets {candidate.start}–{candidate.end} · {candidate.field_supported ? "Named field anchor" : "No field attribution"}: {candidate.context}</p>)}</details>}
+
                     <div className="rounded-xl border border-slate-200">
                         <div className="border-b border-slate-200 bg-slate-50 p-4">
                             <p className="text-sm font-semibold">
@@ -350,6 +358,7 @@ export default function SourceVerification({
                         </button>
                     )}
 
+                    <FieldVerification key={`${version}-${evidenceId}`} evidenceId={evidenceId} version={version} automatic={result} />
                     <p className="text-xs leading-5 text-slate-500">
                         Verification uses deterministic text matching.
                         Matching text alone does not establish that the

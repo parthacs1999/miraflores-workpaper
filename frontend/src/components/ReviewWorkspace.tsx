@@ -1,6 +1,9 @@
 
 "use client";
 
+import { useWorkpaperIdentity } from "@/components/session";
+import { apiFetch } from "@/components/session";
+
 import { useCallback, useEffect, useState } from "react";
 
 const API =
@@ -47,6 +50,7 @@ type ReviewEvent = {
 type ReviewWorkspaceProps = {
     version: string;
     onSelectFinding?: (finding: ReviewFinding) => void;
+    onOpenReference?: (ref: string) => void;
 };
 
 const statuses: {
@@ -76,16 +80,20 @@ async function readResponse(response: Response) {
 export default function ReviewWorkspace({
     version,
     onSelectFinding,
+    onOpenReference,
 }: ReviewWorkspaceProps) {
     const [data, setData] = useState<ReviewResponse | null>(null);
     const [selectedId, setSelectedId] = useState<string | null>(
         null
     );
 
-    const [role, setRole] = useState<ReviewRole>("reviewer");
-    const [reviewerName, setReviewerName] = useState(
+    const identity = useWorkpaperIdentity();
+    const [legacyRole, setRole] = useState<ReviewRole>("reviewer");
+    const role = (identity?.role ?? legacyRole) as ReviewRole;
+    const [legacyReviewerName, setReviewerName] = useState(
         "Demo Reviewer"
     );
+    const reviewerName = identity?.name ?? legacyReviewerName;
     const [status, setStatus] = useState<ReviewStatus>("open");
     const [note, setNote] = useState("");
     const [history, setHistory] = useState<ReviewEvent[]>([]);
@@ -95,7 +103,7 @@ export default function ReviewWorkspace({
     const [message, setMessage] = useState("");
 
     const refresh = useCallback(async () => {
-        const result = (await fetch(
+        const result = (await apiFetch(
             `${API}/api/reviews?version=${encodeURIComponent(version)}`,
             { cache: "no-store" }
         ).then(readResponse)) as ReviewResponse;
@@ -116,7 +124,7 @@ export default function ReviewWorkspace({
             setData(null);
 
             try {
-                const result = (await fetch(
+                const result = (await apiFetch(
                     `${API}/api/reviews?version=${encodeURIComponent(
                         version
                     )}`,
@@ -153,7 +161,7 @@ export default function ReviewWorkspace({
     );
 
     async function loadHistory(findingId: string) {
-        const result = await fetch(
+        const result = await apiFetch(
             `${API}/api/review-history?version=${encodeURIComponent(
                 version
             )}&finding_id=${encodeURIComponent(findingId)}`,
@@ -192,7 +200,7 @@ export default function ReviewWorkspace({
         setMessage("");
 
         try {
-            await fetch(
+            await apiFetch(
                 `${API}/api/review-decision?version=${encodeURIComponent(
                     version
                 )}&finding_id=${encodeURIComponent(selectedId)}`,
@@ -246,6 +254,7 @@ export default function ReviewWorkspace({
 
                         <select
                             aria-label="Demo role"
+                            disabled={!!identity}
                             value={role}
                             onChange={(event) => {
                                 const nextRole = event.target.value as ReviewRole;
@@ -273,6 +282,7 @@ export default function ReviewWorkspace({
 
                         <input
                             aria-label="Reviewer name"
+                            disabled={!!identity}
                             value={reviewerName}
                             onChange={(event) =>
                                 setReviewerName(event.target.value)
@@ -391,9 +401,9 @@ export default function ReviewWorkspace({
                                             {selected.description}
                                         </p>
 
-                                        <p className="mt-3 break-all font-mono text-xs text-slate-400">
-                                            {(selected.refs ?? []).join(" · ")}
-                                        </p>
+                                        <div className="mt-3 flex flex-wrap gap-2 break-all font-mono text-xs text-slate-400">
+                                            {(selected.refs ?? []).map(ref => onOpenReference ? <button key={ref} aria-label={`Open reference ${ref}`} className="text-left text-indigo-700 underline" onClick={() => onOpenReference(ref)}>{ref}</button> : <span key={ref}>{ref}</span>)}
+                                        </div>
 
                                         <p className="mt-3 text-xs text-indigo-600">
                                             Supporting evidence is displayed in the

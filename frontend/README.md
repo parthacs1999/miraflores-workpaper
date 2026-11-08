@@ -2,7 +2,25 @@ This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-
 
 ## Getting Started
 
-First, run the development server:
+Start the FastAPI backend first, in a separate terminal from the repository root:
+
+```bash
+cd backend
+.venv/bin/python run_secure.py --demo
+```
+
+`--demo` explicitly enables **local development** staff selection (Priya, Daniel,
+Helen). It is not authentication, a legal signature or real filing. The server
+binds to `127.0.0.1:8000`. The ordinary `uvicorn app.main:app` launch deliberately
+defaults to locked mode; it does not configure a session provider. Stop an old
+server using port 8000 before starting the demo launcher. Explicit production or
+conflicting security environment settings are rejected by `--demo`.
+
+The existing database is retained and migrations are additive. To use a separate
+demo database instead, prefix the command with
+`REVIEW_DB_PATH=/private/tmp/miraflores-local-demo.db`.
+
+Then, from `frontend`, run the development server:
 
 ```bash
 npm run dev
@@ -15,6 +33,19 @@ bun dev
 ```
 
 Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+
+Use **localhost for both browser and API**. The frontend's `.env.local` should
+contain `NEXT_PUBLIC_API_URL=http://localhost:8000`; restart Next.js if it changes
+(production builds capture this value at build time). The backend allows
+`http://localhost:3000` by default. For a different frontend port, explicitly set
+`WORKPAPER_ORIGINS` to that exact origin when launching the backend. Mixing
+`localhost` and `127.0.0.1` across browser/API hosts can prevent SameSite cookies
+from working. Cookie credentials, CSRF and Origin validation remain mandatory.
+
+The login panel reports a locked/misconfigured/unreachable backend with the API
+URL and a retry action. Select a staff identity and click **Start / switch
+session** only after initialization succeeds. Credential/production mode must be
+configured separately; this demo flag cannot override production settings.
 
 You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
 

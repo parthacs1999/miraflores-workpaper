@@ -1,6 +1,7 @@
 from functools import lru_cache
 
 from app.services.packet_service import load_packet
+from app.services.evidence_service import resolve_reference
 
 
 @lru_cache(maxsize=1)
@@ -18,7 +19,8 @@ def get_version(version_id):
     return indexes()["versions"].get(version_id)
 
 
-def resolve_source(source_id):
+def resolve_source(source_id, version_id="v3"):
+    resolution = resolve_reference(source_id, version_id).model_dump()
     idx = indexes()
 
     if source_id.startswith("ev-"):
@@ -28,6 +30,7 @@ def resolve_source(source_id):
             return {
                 "ref": source_id,
                 "type": "missing_evidence",
+                "resolution": resolution,
             }
 
         document = idx["documents"].get(evidence["document_id"])
@@ -35,6 +38,7 @@ def resolve_source(source_id):
         return {
             "ref": source_id,
             "type": "extracted_value",
+            "resolution": resolution,
             "evidence": evidence,
             "document": (
                 {
@@ -52,7 +56,8 @@ def resolve_source(source_id):
     return {
         "ref": source_id,
         "type": "external_reference",
-        "status": "unresolved",
+        "status": resolution["status"],
+        "resolution": resolution,
     }
 
 
@@ -90,7 +95,7 @@ def trace_line(line_key, version_id="v3"):
             "value": line["value"],
             "rule": line.get("rule"),
             "note": line.get("note"),
-            "sources": [resolve_source(source) for source in line.get("sources", [])],
+            "sources": [resolve_source(source, version_id) for source in line.get("sources", [])],
             "inputs": [
                 visit(input_key, next_visited) for input_key in line.get("inputs", [])
             ],
@@ -103,57 +108,5 @@ def trace_line(line_key, version_id="v3"):
 
 
 def document_destinations(document_id, version_id="v3"):
-    idx = indexes()
-
-    if document_id not in idx["documents"]:
-        return None
-
-    version = get_version(version_id)
-
-    if version is None:
-        return None
-
-    evidence_ids = {
-        e["id"] for e in idx["evidence"].values() if e["document_id"] == document_id
-    }
-
-    line_index = {line["key"]: line for line in version["lines"]}
-
-    direct = [
-        line
-        for line in version["lines"]
-        if evidence_ids.intersection(line.get("sources", []))
-    ]
-
-    direct_keys = {line["key"] for line in direct}
-
-    downstream = set(direct_keys)
-
-    changed = True
-
-    while changed:
-        changed = False
-
-        for line in version["lines"]:
-            if line["key"] in downstream:
-                continue
-
-            if downstream.intersection(line.get("inputs", [])):
-                downstream.add(line["key"])
-                changed = True
-
-    return {
-        "document_id": document_id,
-        "version": version_id,
-        "direct_lines": direct,
-        "downstream_lines": [
-            line_index[key] for key in sorted(downstream - direct_keys)
-        ],
-        "unused_evidence_ids": sorted(
-            evidence_ids
-            - {source for line in direct for source in line.get("sources", [])}
-        ),
-        "document_used_by_engine": document_id in version.get("documents_used", []),
-        "document_superseded_by_engine": document_id
-        in version.get("documents_superseded", []),
-    }
+    from app.services.document_accountability_service import document_destinations as trace_document
+    return trace_document(document_id, version_id)

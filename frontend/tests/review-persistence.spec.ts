@@ -1,7 +1,7 @@
 
 import { test, expect } from "@playwright/test";
 
-const API = "http://localhost:8000";
+const API = process.env.E2E_API_URL ?? "http://localhost:8000";
 
 type Finding = {
     id: string;
@@ -34,7 +34,7 @@ test("CPA review decisions persist after refresh", async ({
     const finding = data.findings[0];
     const uniqueNote = `Playwright verification ${Date.now()}`;
 
-    await page.goto("http://localhost:3000");
+    await page.goto(process.env.E2E_BASE_URL ?? "http://localhost:3000");
 
     await page.getByLabel("Return version").selectOption("v3");
 
