@@ -13,7 +13,9 @@
     "test:assignment-config": "node --test assignment-hosting-config.test.mjs",
     "test:assignment": "playwright test --config=playwright.assignment.config.ts",
     "test:public-config": "node --test public-hosting-config.test.mjs",
-    "test:public": "playwright test --config=playwright.public.config.ts"
+    "test:public": "playwright test --config=playwright.public.config.ts",
+    "postbuild": "node scripts/verify-build.mjs",
+    "test:integration-config": "node --test scripts/verify-build.test.mjs"
   },
   "dependencies": {
     "lucide-react": "^1.70.0",

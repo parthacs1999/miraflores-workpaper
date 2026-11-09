@@ -3,6 +3,7 @@ import asyncio
 import hashlib
 import sqlite3
 import time
+from urllib.parse import quote
 import pytest
 from fastapi.testclient import TestClient
 from app.public_demo import configuration,SandboxStore,create_public_app,database_scope,PACKET_SHA256
@@ -188,3 +189,23 @@ def test_reviewer_decisions_and_checkpoints_are_private(public):
     assert 'Visitor-specific demonstration review' in a.get('/api/reviews').text
     assert 'Visitor-specific demonstration review' not in b.get('/api/reviews').text
     assert 'Visitor-specific demonstration review' not in b.get('/api/product/changes?wait_seconds=0').text
+
+
+def test_actual_frontend_review_alias_and_impact_routes_are_private_and_csrf_protected(public):
+    app,_=public;a,b=visitor(app),visitor(app);headers,_=bootstrap(a);bootstrap(b)
+    finding=a.get('/api/reviews').json()['findings'][0]
+    body={'status':'in_review','note':'Frontend review alias persists privately','actor_role':'preparer','actor_name':'st-01'}
+    route='/api/review-decision?version=v3&finding_id='+quote(finding['id'],safe='')
+    assert a.patch(route,json=body).status_code==403
+    response=a.patch(route,headers=headers,json=body);assert response.status_code==200,response.text
+    history='/api/review-history?version=v3&finding_id='+quote(finding['id'],safe='')
+    assert 'Frontend review alias persists privately' in a.get(history).text
+    assert 'Frontend review alias persists privately' not in b.get(history).text
+    payload={'version':'v3','refs':['SchC.1'],'note':'Documented private change-impact reassessment'}
+    assert a.post('/api/change-impact/reassess',json=payload).status_code==403
+    assert a.post('/api/change-impact/reassess',headers=headers,json=payload).status_code==403
+    headers=role(a,headers,'st-02')
+    impact=a.post('/api/change-impact/reassess',headers=headers,json=payload);assert impact.status_code==200,impact.text
+    assert a.post('/api/change-impact',headers=headers,json=payload).status_code==403
+    assert a.post('/api/workflow/policies',headers=headers,json={}).status_code==403
+    assert not a.get('/api/workflow/readiness').json()['filing_ready']

@@ -28,9 +28,7 @@ test("assignment HTTPS login labels state loss, preserves role selection boundar
 }) => {
   expect((await page.request.get("/api/documents")).status()).toBe(401);
   await login(page);
-  await page
-    .getByLabel("Switch staff session", { exact: true })
-    .click();
+  await page.getByLabel("Switch staff session", { exact: true }).click();
   await expect(
     page.getByLabel("Session staff", { exact: true }),
   ).toBeDisabled();
@@ -42,7 +40,15 @@ test("assignment HTTPS login labels state loss, preserves role selection boundar
   );
   expect(cookie?.secure && cookie?.httpOnly).toBe(true);
   expect(cookie?.sameSite).toBe("Strict");
+  // The workspace clears before the request finishes; authorization is asserted after server logout.
+  const ended = page.waitForResponse(
+    (response) =>
+      response.request().method() === "POST" &&
+      response.url().endsWith("/api/workflow/session") &&
+      response.request().postDataJSON()?.staff_id === null,
+  );
   await page.getByRole("button", { name: "End session", exact: true }).click();
+  expect((await ended).status()).toBe(200);
   await expect(page.locator(".firm-workspace")).toHaveCount(0);
   expect((await page.request.get("/api/documents")).status()).toBe(401);
 });
@@ -125,7 +131,9 @@ test("assignment rejects incorrect tokens and administrator tax-detail access", 
   await page
     .getByRole("button", { name: "Start / switch session", exact: true })
     .click();
-  await expect(page.locator("p[role=alert]")).toContainText("Session request rejected; check identity");
+  await expect(page.locator("p[role=alert]")).toContainText(
+    "Session request rejected; check identity",
+  );
   expect((await page.request.get("/api/documents")).status()).toBe(401);
   await login(page, "st-05");
   expect(

@@ -74,7 +74,7 @@ Create a **separate** Vercel project from the same repository:
 | Build | `npm run build -- --webpack` |
 | Output | Default Next.js output; no static export |
 | Domain | Free assigned `YOUR-PROJECT.vercel.app` hostname |
-| Git auto-deployment | Existing configuration keeps it off; deploy/redeploy manually when ready |
+| Git auto-deployment | Enabled by default; connect the intended repository and production branch `main` |
 
 Set these five build/runtime environment values:
 
@@ -160,3 +160,7 @@ Created:
 Modified: `README.md`, `backend/app/security_context.py`, `backend/app/services/review_service.py`, `backend/app/services/firm_policy.py`, `frontend/.gitignore`, `frontend/next.config.ts`, `frontend/package.json`, `frontend/src/components/FirmWorkflow.tsx`, and `frontend/src/components/shell/AppShell.tsx`. Temporary Next.js generated-type includes may be written during builds; no TypeScript checks are relaxed. Secure/assignment launchers and configurations, existing database records, Instructions.json, computation rules, adjustment approval rules and filing-readiness logic are unchanged.
 
 **Status:** implemented and locally verified; not deployed. The remaining manual steps are publishing reviewed source, creating the two services, matching exact origins, confirming the chosen Vercel plan's eligibility and running step 4 against the actual public URL. No additional login/token setup or fictional-packet approval gate is required.
+
+## FastAPI integration and automatic Git deployment
+
+The repository no longer disables Vercel Git deployments. `npm run build -- --webpack` automatically runs a postbuild check rejecting unexpected Supabase/Vite assets and a missing/wrong public FastAPI rewrite. See [API_INTEGRATION.md](API_INTEGRATION.md) for the production artifact mismatch evidence, exact route mapping, two sandbox allowlist corrections, current configuration and regression results. Correct project/domain assignment is still required; a Git push cannot change which unrelated project owns a hostname. Render auto-deployment is a separate setting; manually deploy the updated backend for the narrow public allowlist corrections if it remains disabled.

@@ -23,7 +23,7 @@ from app.security_context import request_database_path
 PACKET_SHA256='ee01f8508bd2fd9854754b82fd9c4a055bdc55e2778a132002a25381c412ad19'
 STAFF=('st-01','st-02','st-03')
 NOTICE='PUBLIC DEMO — fictional packet, simulated roles and approvals; private temporary sandbox. Changes disappear on expiry or server restart. FILING BLOCKED.'
-WRITE_PATHS=(r'/api/adjustments(?:/[^/]+/(?:revisions|actions))?',r'/api/reviews(?:/.+)?',r'/api/field-verifications/[^/]+',r'/api/reconciliation-(?:decision|links)',r'/api/reconciliations/[^/]+/adjustment',r'/api/workflow/(?:records(?:/[^/]+/actions)?|notes|signoffs(?:/[^/]+/revoke)?|tasks)',r'/api/(?:what-if/(?:compare|analyses)|change-impact)',r'/api/product/checkpoint')
+WRITE_PATHS=(r'/api/adjustments(?:/[^/]+/(?:revisions|actions))?',r'/api/(?:reviews(?:/.+)?|review-decision)',r'/api/field-verifications/[^/]+',r'/api/reconciliation-(?:decision|links)',r'/api/reconciliations/[^/]+/adjustment',r'/api/workflow/(?:records(?:/[^/]+/actions)?|notes|signoffs(?:/[^/]+/revoke)?|tasks)',r'/api/(?:what-if/(?:compare|analyses)|change-impact/reassess)',r'/api/product/checkpoint')
 
 
 def configuration(env=None):

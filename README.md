@@ -257,3 +257,5 @@ For a separate disposable, token-restricted $0 assignment profile, see [FREE_DEP
 ## Public hiring-assignment demo
 
 For a separate **no-login, fictional-data public demo** with private temporary visitor sandboxes, see [PUBLIC_DEMO_DEPLOYMENT.md](PUBLIC_DEMO_DEPLOYMENT.md). It uses Render Free + Vercel, a simulated role switcher, and server-side blocking of uploads, originals, administrative writes and filing operations. Existing secure profiles remain separate.
+
+For the frontend network audit, note/audit API mapping, automatic Git deployment configuration and production artifact verification, see [API_INTEGRATION.md](API_INTEGRATION.md).
