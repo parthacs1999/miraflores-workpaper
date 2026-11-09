@@ -65,13 +65,36 @@ export function verifyBuild(root, env = process.env) {
         "Public build must contain exactly the configured FastAPI /api rewrite",
       );
     const page = resolve(root, "server/app/index.html");
+    if (!existsSync(page))
+      throw new Error(
+        "Public Next.js root page is missing: server/app/index.html",
+      );
+    const markup = readFileSync(page, "utf8");
+    if (!markup.includes("/_next/"))
+      throw new Error(
+        "Public Next.js root page does not reference Next.js assets",
+      );
+    // A prerendered shell need not contain the hydrated Client Component's text.
+    // Accept only scripts referenced by this page and already scanned above.
+    const scripts = [
+      ...markup.matchAll(/<script\b[^>]*\bsrc=["']([^"']+)["']/gi),
+    ]
+      .map((match) => new URL(match[1], "https://build.invalid").pathname)
+      .filter((path) => path.startsWith("/_next/static/"))
+      .map((path) => resolve(root, path.slice("/_next/".length)))
+      .filter((path) => path.endsWith(".js") && assets.includes(path));
+    const text = markup
+      .replace(/<!--[\s\S]*?-->/g, " ")
+      .replace(/<[^>]+>/g, " ")
+      .replace(/&nbsp;|&#(?:32|160);|&#x(?:20|a0);/gi, " ")
+      .replace(/\s+/g, " ");
+    const indicator = "PUBLIC FICTIONAL DEMO";
     if (
-      !existsSync(page) ||
-      !readFileSync(page, "utf8").includes("PUBLIC FICTIONAL DEMO") ||
-      !readFileSync(page, "utf8").includes("/_next/")
+      !text.includes(indicator) &&
+      !scripts.some((path) => readFileSync(path, "utf8").includes(indicator))
     )
       throw new Error(
-        "Public Next.js root page or demonstration indicator is missing",
+        "Public demonstration indicator is missing from the root page and its referenced client scripts",
       );
   }
   return { browserAssets: assets.length, htmlPages: html.length };
