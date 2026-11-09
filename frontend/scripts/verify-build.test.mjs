@@ -25,6 +25,23 @@ function fixture(t) {
   t.after(() => rmSync(root, { recursive: true, force: true }));
   for (const dir of ["static/chunks", "server/app"])
     mkdirSync(join(root, dir), { recursive: true });
+  writeFileSync(
+    join(root, "app-path-routes-manifest.json"),
+    JSON.stringify({ "/page": "/" }),
+  );
+  writeFileSync(
+    join(root, "server/app-paths-manifest.json"),
+    JSON.stringify({ "/page": "app/page.js" }),
+  );
+  writeFileSync(join(root, "server/app/page.js"), "module.exports = {};");
+  writeFileSync(
+    join(root, "server/app/page_client-reference-manifest.js"),
+    'globalThis.__RSC_MANIFEST=(globalThis.__RSC_MANIFEST||{});globalThis.__RSC_MANIFEST["/page"]=' +
+      JSON.stringify({
+        clientModules: { page: { chunks: ["123", "static/chunks/page.js"] } },
+      }) +
+      ";",
+  );
   writeFileSync(join(root, "BUILD_ID"), "isolated-test-build");
   writeFileSync(join(root, "build-manifest.json"), "{}");
   writeFileSync(
@@ -42,7 +59,7 @@ function fixture(t) {
   );
   writeFileSync(
     join(root, "static/chunks/page.js"),
-    'fetch("/api/workflow/notes");',
+    'fetch("/api/workflow/notes");"PUBLIC FICTIONAL DEMO";',
   );
   writeFileSync(
     join(root, "server/app/index.html"),
@@ -90,9 +107,9 @@ test("missing or wrong API rewrite fails the production gate", (t) => {
   );
   assert.throws(() => verifyBuild(root, env), /FastAPI/);
 });
-test("legacy root HTML is rejected even with superficially valid Next.js metadata", (t) => {
+test("HTML cannot substitute for the real root route", (t) => {
   const root = fixture(t);
-  writeFileSync(join(root, "server/app/index.html"), '<div id="root"></div>');
+  writeFileSync(join(root, "app-path-routes-manifest.json"), "{}");
   assert.throws(() => verifyBuild(root, env), /root page/);
 });
 test("Git auto-deployment is not disabled and the production build always verifies artifacts", () => {
@@ -187,6 +204,10 @@ test("HTML text boundaries and encoded whitespace do not hide the public indicat
 test("missing public indicator still fails even with correct config and Next.js assets", (t) => {
   const root = fixture(t);
   writeFileSync(
+    join(root, "static/chunks/page.js"),
+    'fetch("/api/workflow/notes");',
+  );
+  writeFileSync(
     join(root, "server/app/index.html"),
     '<html>Loading<script src="/_next/static/chunks/page.js"></script></html>',
   );
@@ -204,13 +225,75 @@ test("missing public indicator still fails even with correct config and Next.js 
   );
 });
 
-test("missing root HTML has its own precise diagnostic", (t) => {
+test("Vercel adapter scoped HTML passes without server/app/index.html", (t) => {
   const root = fixture(t);
-  rmSync(join(root, "server/app/index.html"));
-  assert.throws(
-    () => verifyBuild(root, env),
-    /root page is missing: server\/app\/index.html/,
+  const scoped = join(root, "server/route-cache/APP_PAGE/hash/$");
+  mkdirSync(scoped, { recursive: true });
+  writeFileSync(
+    join(scoped, "index.html"),
+    readFileSync(join(root, "server/app/index.html")),
   );
+  rmSync(join(root, "server/app/index.html"));
+  assert.equal(verifyBuild(root, { ...env, VERCEL: "1" }).htmlPages, 1);
+  rmSync(join(scoped, "index.html"));
+  assert.equal(verifyBuild(root, env).htmlPages, 0);
+});
+for (const name of [
+  "app-path-routes-manifest.json",
+  "server/app-paths-manifest.json",
+  "server/app/page.js",
+  "server/app/page_client-reference-manifest.js",
+  "static/chunks/page.js",
+]) {
+  test("missing required root artifact fails: " + name, (t) => {
+    const root = fixture(t);
+    rmSync(join(root, name));
+    assert.throws(() => verifyBuild(root, env), /missing/);
+  });
+}
+for (const value of [
+  'globalThis.__RSC_MANIFEST["/other/page"]={};',
+  'globalThis.__RSC_MANIFEST["/page"]={};',
+  'globalThis.__RSC_MANIFEST["/page"]={invalid};',
+  'globalThis.__RSC_MANIFEST["/page"]={"clientModules":{"x":{"chunks":["static/../escape.js"]}}};',
+  'globalThis.__RSC_MANIFEST["/page"]={"clientModules":{"x":{"chunks":["static/missing.js"]}}};',
+])
+  test("invalid or incomplete root client graph fails: " + value, (t) => {
+    const root = fixture(t);
+    writeFileSync(
+      join(root, "server/app/page_client-reference-manifest.js"),
+      value,
+    );
+    assert.throws(() => verifyBuild(root, env));
+  });
+test("scoped HTML still rejects forbidden assets", (t) => {
+  const root = fixture(t);
+  mkdirSync(join(root, "server/route-cache"), { recursive: true });
+  writeFileSync(
+    join(root, "server/route-cache/page.html"),
+    '<script src="/@vite/client"></script>',
+  );
+  assert.throws(() => verifyBuild(root, env), /Unexpected Vite/);
+});
+test("route groups and manifest-selected entries work without a fixed page path", (t) => {
+  const root = fixture(t);
+  writeFileSync(
+    join(root, "app-path-routes-manifest.json"),
+    JSON.stringify({ "/(demo)/page": "/" }),
+  );
+  writeFileSync(
+    join(root, "server/app-paths-manifest.json"),
+    JSON.stringify({ "/(demo)/page": "app/custom.js" }),
+  );
+  writeFileSync(join(root, "server/app/custom.js"), "module.exports={};");
+  writeFileSync(
+    join(root, "server/app/custom_client-reference-manifest.js"),
+    readFileSync(
+      join(root, "server/app/page_client-reference-manifest.js"),
+      "utf8",
+    ).replace('["/page"]', '["/(demo)/page"]'),
+  );
+  assert.equal(verifyBuild(root, env).browserAssets, 1);
 });
 
 for (const name of [

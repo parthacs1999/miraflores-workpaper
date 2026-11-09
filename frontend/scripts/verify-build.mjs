@@ -1,6 +1,6 @@
 /** Reject legacy or third-party backend artifacts after a real Next.js build. */
 import { readdirSync, readFileSync, existsSync, statSync } from "node:fs";
-import { resolve, relative } from "node:path";
+import { resolve, relative, isAbsolute } from "node:path";
 import { pathToFileURL } from "node:url";
 import { publicHostingConfig } from "../public-hosting-config.mjs";
 
@@ -15,6 +15,70 @@ const forbidden = [
   ["Supabase", /supabase|\breview_notes\b|\baudit_log\b/i],
   ["Vite", /\bvite\b|__vite__|\/@vite\/|vite\.svg|import\.meta\.env/i],
 ];
+
+// Resolve artifact references from Next's manifests, never a guessed HTML location.
+function artifact(root, name) {
+  if (
+    typeof name !== "string" ||
+    isAbsolute(name) ||
+    name.split(/[\\/]/).includes("..")
+  )
+    throw new Error("Invalid Next.js artifact reference");
+  const path = resolve(root, name);
+  if (!existsSync(path) || !statSync(path).isFile() || !statSync(path).size)
+    throw new Error("Expected Next.js artifact is missing: " + name);
+  return path;
+}
+function jsonArtifact(root, name) {
+  return JSON.parse(readFileSync(artifact(root, name), "utf8"));
+}
+function rootClientScripts(root, assets) {
+  const routes = jsonArtifact(root, "app-path-routes-manifest.json");
+  const entries = jsonArtifact(root, "server/app-paths-manifest.json");
+  const pages = Object.keys(routes).filter(
+    (key) => routes[key] === "/" && key.endsWith("/page"),
+  );
+  if (!pages.length)
+    throw new Error("Next.js root page is missing from route manifests");
+  const scripts = new Set();
+  for (const page of pages) {
+    const entry = entries[page];
+    artifact(root, typeof entry === "string" ? "server/" + entry : entry);
+    if (!entry.endsWith(".js"))
+      throw new Error("Unsupported Next.js root page entry");
+    const source = readFileSync(
+      artifact(
+        root,
+        "server/" + entry.replace(/\.js$/, "_client-reference-manifest.js"),
+      ),
+      "utf8",
+    );
+    // Next emits a JSON assignment. Parse its data without executing build output.
+    const match = source.match(
+      /globalThis\.__RSC_MANIFEST\[("(?:[^"\\]|\\.)*")\]\s*=\s*([\s\S]+?)\s*;?\s*$/,
+    );
+    if (!match || JSON.parse(match[1]) !== page)
+      throw new Error("Invalid Next.js root client-reference manifest");
+    const manifest = JSON.parse(match[2].replace(/;\s*$/, ""));
+    const chunks = Object.values(manifest.clientModules ?? {})
+      .flatMap((module) => module.chunks ?? [])
+      .filter(
+        (chunk) =>
+          typeof chunk === "string" &&
+          chunk.startsWith("static/") &&
+          chunk.endsWith(".js"),
+      );
+    if (!chunks.length)
+      throw new Error("Next.js root page client chunks are missing");
+    for (const chunk of chunks) {
+      const path = artifact(root, chunk);
+      if (!assets.includes(path))
+        throw new Error("Unscanned Next.js root client chunk");
+      scripts.add(path);
+    }
+  }
+  return [...scripts];
+}
 
 export function verifyBuild(root, env = process.env) {
   root = resolve(root);
@@ -35,7 +99,7 @@ export function verifyBuild(root, env = process.env) {
   const assets = files(resolve(root, "static")).filter((p) =>
     /\.(js|css|html|map)$/.test(p),
   );
-  const html = files(resolve(root, "server/app")).filter((p) =>
+  const html = files(resolve(root, "server")).filter((p) =>
     p.endsWith(".html"),
   );
   if (!assets.some((p) => p.endsWith(".js")))
@@ -64,37 +128,16 @@ export function verifyBuild(root, env = process.env) {
       throw new Error(
         "Public build must contain exactly the configured FastAPI /api rewrite",
       );
-    const page = resolve(root, "server/app/index.html");
-    if (!existsSync(page))
-      throw new Error(
-        "Public Next.js root page is missing: server/app/index.html",
-      );
-    const markup = readFileSync(page, "utf8");
-    if (!markup.includes("/_next/"))
-      throw new Error(
-        "Public Next.js root page does not reference Next.js assets",
-      );
-    // A prerendered shell need not contain the hydrated Client Component's text.
-    // Accept only scripts referenced by this page and already scanned above.
-    const scripts = [
-      ...markup.matchAll(/<script\b[^>]*\bsrc=["']([^"']+)["']/gi),
-    ]
-      .map((match) => new URL(match[1], "https://build.invalid").pathname)
-      .filter((path) => path.startsWith("/_next/static/"))
-      .map((path) => resolve(root, path.slice("/_next/".length)))
-      .filter((path) => path.endsWith(".js") && assets.includes(path));
-    const text = markup
-      .replace(/<!--[\s\S]*?-->/g, " ")
-      .replace(/<[^>]+>/g, " ")
-      .replace(/&nbsp;|&#(?:32|160);|&#x(?:20|a0);/gi, " ")
-      .replace(/\s+/g, " ");
-    const indicator = "PUBLIC FICTIONAL DEMO";
+    // Adapter-enabled builds put HTML in scoped route-cache directories. The
+    // route -> compiled entry -> client-reference graph is valid in both layouts.
+    const scripts = rootClientScripts(root, assets);
     if (
-      !text.includes(indicator) &&
-      !scripts.some((path) => readFileSync(path, "utf8").includes(indicator))
+      !scripts.some((path) =>
+        readFileSync(path, "utf8").includes("PUBLIC FICTIONAL DEMO"),
+      )
     )
       throw new Error(
-        "Public demonstration indicator is missing from the root page and its referenced client scripts",
+        "Public demonstration indicator is missing from root-linked client chunks",
       );
   }
   return { browserAssets: assets.length, htmlPages: html.length };
